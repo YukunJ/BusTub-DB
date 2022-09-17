@@ -41,7 +41,7 @@ std::vector<std::string> GenerateNRandomString(int n) {
   return rand_strs;
 }
 
-TEST(StarterTest, DISABLED_TrieNodeInsertTest) {
+TEST(StarterTest, TrieNodeInsertTest) {
   // Test Insert
   //  When same key is inserted twice, insert should return nullptr
   // When inserted key and unique_ptr's key does not match, return nullptr
@@ -60,7 +60,7 @@ TEST(StarterTest, DISABLED_TrieNodeInsertTest) {
   EXPECT_EQ((*child_node)->GetKeyChar(), 'c');
 }
 
-TEST(StarterTest, DISABLED_TrieNodeRemoveTest) {
+TEST(StarterTest, TrieNodeRemoveTest) {
   auto t = TrieNode('a');
   __attribute__((unused)) auto child_node = t.InsertChildNode('b', std::make_unique<TrieNode>('b'));
   child_node = t.InsertChildNode('c', std::make_unique<TrieNode>('c'));
@@ -78,7 +78,50 @@ TEST(StarterTest, DISABLED_TrieNodeRemoveTest) {
   EXPECT_EQ(child_node, nullptr);
 }
 
-TEST(StarterTest, DISABLED_TrieInsertTest) {
+TEST(StarterTest, TrieMoveConstructTest) {
+  // Test Move Constructor
+  // When we create a TrieNode by move constructor from another TrieNode
+  // the other TrieNode's children map should be moved out and be empty afterwards
+  auto other = TrieNode('a');
+  other.InsertChildNode('b', std::make_unique<TrieNode>('b'));
+  other.InsertChildNode('c', std::make_unique<TrieNode>('c'));
+  EXPECT_EQ(other.HasChildren(), true);
+  EXPECT_EQ((*other.GetChildNode('b'))->GetKeyChar(), 'b');
+  EXPECT_EQ((*other.GetChildNode('c'))->GetKeyChar(), 'c');
+
+  auto curr = TrieNode(std::move(other));
+  EXPECT_EQ(other.HasChildren(), false);  // should already lose all children
+  EXPECT_EQ(curr.HasChildren(), true);
+
+  auto child_node_b = curr.GetChildNode('b');
+  EXPECT_NE(child_node_b, nullptr);
+  EXPECT_EQ((*child_node_b)->GetKeyChar(), 'b');
+}
+
+TEST(StarterTest, TrieTerminalTest) {
+  // Test Terminal TrieNode Construction
+
+  // plain construction
+  auto new_terminal = TrieNodeWithValue('a', 1);
+  new_terminal.InsertChildNode('b', std::make_unique<TrieNode>('b'));
+  EXPECT_EQ(new_terminal.IsEndNode(), true);
+  EXPECT_EQ(new_terminal.HasChildren(), true);
+  EXPECT_EQ(new_terminal.GetValue(), 1);
+  EXPECT_EQ((*new_terminal.GetChildNode('b'))->GetKeyChar(), 'b');
+
+  // convert a TrieNode into Terminal TrieNode
+  auto other = TrieNode('a');
+  other.InsertChildNode('b', std::make_unique<TrieNode>('b'));
+  other.InsertChildNode('c', std::make_unique<TrieNode>('c'));
+  EXPECT_EQ(other.IsEndNode(), false);
+
+  auto converted_node = TrieNodeWithValue(std::move(other), 2);
+  EXPECT_EQ(converted_node.IsEndNode(), true);
+  EXPECT_EQ(converted_node.GetValue(), 2);
+  EXPECT_EQ(converted_node.HasChild('b'), true);
+}
+
+TEST(StarterTest, TrieInsertTest) {
   {
     Trie trie;
     trie.Insert<std::string>("abc", "d");
@@ -129,7 +172,7 @@ TEST(StarterTest, DISABLED_TrieInsertTest) {
   }
 }
 
-TEST(StarterTrieTest, DISABLED_RemoveTest) {
+TEST(StarterTrieTest, RemoveTest) {
   {
     Trie trie;
     bool success = trie.Insert<int>("a", 5);
@@ -162,7 +205,7 @@ TEST(StarterTrieTest, DISABLED_RemoveTest) {
   }
 }
 
-TEST(StarterTrieTest, DISABLED_ConcurrentTest1) {
+TEST(StarterTrieTest, ConcurrentTest1) {
   Trie trie;
   constexpr int num_words = 1000;
   constexpr int num_bits = 10;
