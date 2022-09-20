@@ -94,7 +94,6 @@ auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
 
 void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
   std::scoped_lock<std::mutex> lock(latch_);
-  BUSTUB_ASSERT(0 <= frame_id && static_cast<uint64_t>(frame_id) < num_frames_, "frame id is invalid");
   if (frames_[frame_id] == nullptr) {
     AllocateFrameRecord(frame_id);
   }
@@ -103,7 +102,6 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
 
 void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
   std::scoped_lock<std::mutex> lock(latch_);
-  BUSTUB_ASSERT(0 <= frame_id && static_cast<uint64_t>(frame_id) < num_frames_, "frame id is invalid");
   if (frames_[frame_id] == nullptr) {
     // no page allocated for this
     return;
@@ -125,7 +123,6 @@ void LRUKReplacer::Remove(frame_id_t frame_id) {
     // not found, directly return
     return;
   }
-  BUSTUB_ASSERT(frames_[frame_id]->IsEvictable(), "to remove a page, it must be evictable");
   DeallocateFrameRecord(frame_id);
 }
 
