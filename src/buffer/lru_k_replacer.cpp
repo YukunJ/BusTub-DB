@@ -18,7 +18,7 @@ namespace bustub {
 // ----------------------------------------------- //
 LRUKFrameRecord::LRUKFrameRecord(size_t frame_id, size_t k) : frame_id_(frame_id), k_(k) {}
 
-auto LRUKFrameRecord::IsEvictable() -> bool { return is_evictable_; }
+auto LRUKFrameRecord::IsEvictable() const -> bool { return is_evictable_; }
 
 auto LRUKFrameRecord::SetEvictable(bool is_evictable) -> void { is_evictable_ = is_evictable; }
 
@@ -31,7 +31,7 @@ auto LRUKFrameRecord::Access(uint64_t time) -> void {
   access_records_.push(time);
 }
 
-auto LRUKFrameRecord::LastKAccessTime() -> uint64_t {
+auto LRUKFrameRecord::LastKAccessTime() const -> uint64_t {
   // if not enough k records, return INFINITY
   if (access_records_.size() < k_) {
     return ACCESSTIME_INFINITY;
@@ -39,14 +39,18 @@ auto LRUKFrameRecord::LastKAccessTime() -> uint64_t {
   return access_records_.front();
 }
 
-auto LRUKFrameRecord::EarliestAccessTime() -> uint64_t { return access_records_.front(); }
+auto LRUKFrameRecord::EarliestAccessTime() const -> uint64_t { return access_records_.front(); }
 
-auto LRUKFrameRecord::GetFrameId() -> size_t { return frame_id_; }
+auto LRUKFrameRecord::GetFrameId() const -> size_t { return frame_id_; }
+
+auto LRUKFrameRecord::AccessSize() const -> size_t { return access_records_.size(); }
+
+auto LRUKFrameRecord::GetK() const -> size_t { return k_; }
 
 // ---------------- LRUKReplacer ----------------- //
 // ----------------------------------------------- //
 
-LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : num_frames_(num_frames), k_(k) {
+LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : k_(k) {
   // fixed size of frames, initially all set to be null frame
   frames_.resize(num_frames, nullptr);
 }
@@ -54,42 +58,14 @@ LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : num_frames_(num_frames
 auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
   // whenever there is evictable frame with less than k access, they get evicted first
   std::scoped_lock<std::mutex> lock(latch_);
-  uint64_t less_than_k_access_time = ACCESSTIME_INFINITY;
-  size_t less_than_k_access_frame = num_frames_;
-  uint64_t earliest_k_access_time = ACCESSTIME_INFINITY;
-  size_t earliest_k_access_frame = num_frames_;
-  for (size_t i = 0; i < frames_.size(); i++) {
-    if (frames_[i] != nullptr && frames_[i]->IsEvictable()) {
-      uint64_t access_time_k = frames_[i]->LastKAccessTime();
-      if (access_time_k == ACCESSTIME_INFINITY) {
-        // not enough k access, check the earliest one
-        uint64_t access_time_earliest = frames_[i]->EarliestAccessTime();
-        if (access_time_earliest < less_than_k_access_time) {
-          less_than_k_access_time = access_time_earliest;
-          less_than_k_access_frame = i;
-        }
-      } else {
-        // enough k access
-        if (access_time_k < earliest_k_access_time) {
-          earliest_k_access_time = access_time_k;
-          earliest_k_access_frame = i;
-        }
-      }
-    }
+  if (lru_set_.empty()) {
+    return false;
   }
-  if (less_than_k_access_frame < num_frames_) {
-    // evict a frame with less than k access first
-    *frame_id = less_than_k_access_frame;
-    DeallocateFrameRecord(less_than_k_access_frame);
-    return true;
-  }
-  if (earliest_k_access_frame < num_frames_) {
-    // evict the farthest k access frame
-    *frame_id = earliest_k_access_frame;
-    DeallocateFrameRecord(earliest_k_access_frame);
-    return true;
-  }
-  return false;  // no evictable frame found
+  auto first_iter = lru_set_.begin();
+  frame_id_t removed_frame_id = (*first_iter)->GetFrameId();
+  DeallocateFrameRecord(removed_frame_id);
+  *frame_id = removed_frame_id;
+  return true;
 }
 
 void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
@@ -97,7 +73,16 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
   if (frames_[frame_id] == nullptr) {
     AllocateFrameRecord(frame_id);
   }
+  // careful here that, if you made change to frame
+  // the set might contain duplicate, because "old version" and "new version" deemed different
+  // therefore, first remove, make changes, and then add it back
+  if (frames_[frame_id]->IsEvictable()) {
+    lru_set_.erase(frames_[frame_id]);
+  }
   frames_[frame_id]->Access(CurrTime());
+  if (frames_[frame_id]->IsEvictable()) {
+    lru_set_.insert(frames_[frame_id]);
+  }
 }
 
 void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
@@ -109,10 +94,12 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
   if (set_evictable && !frames_[frame_id]->IsEvictable()) {
     // transit from not evictable to evictable
     replacer_size_++;
+    lru_set_.insert(frames_[frame_id]);
   }
   if (!set_evictable && frames_[frame_id]->IsEvictable()) {
     // transit from evictable to non evictable
     replacer_size_--;
+    lru_set_.erase(frames_[frame_id]);
   }
   frames_[frame_id]->SetEvictable(set_evictable);
 }
@@ -134,6 +121,7 @@ auto LRUKReplacer::AllocateFrameRecord(size_t frame_id) -> void {
 }
 
 auto LRUKReplacer::DeallocateFrameRecord(size_t frame_id) -> void {
+  lru_set_.erase(frames_[frame_id]);
   frames_[frame_id] = nullptr;
   curr_size_--;
   replacer_size_--;

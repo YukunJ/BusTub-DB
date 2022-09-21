@@ -10,6 +10,20 @@
 //
 //===----------------------------------------------------------------------===//
 
+/**
+ * Version2: Optimization attempt
+ * In original version, we keep an array of frame records
+ * everytime we want to search, we iterate over and try to find a victim
+ * and we can update frame's status directly through the array indexing
+ * which gives: search O(n) and write O(1) time complexity
+ *
+ * We are not sure if the system is read-heavy or write-heavy. We will try an alternative design here
+ * we will maintain two separate ordered container (std::set) for record with enough k access, and not enough k access
+ * This will involve a bit more engineering effort,
+ * since we will need to move thing around back and forth between the two containers
+ * which gives: search O(1) and write O(logn) time complexity
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -18,6 +32,7 @@
 #include <memory>
 #include <mutex>  // NOLINT
 #include <queue>
+#include <set>
 #include <unordered_map>
 #include <vector>
 #include "common/config.h"
@@ -46,7 +61,7 @@ class LRUKFrameRecord {
    * @brief check if this frame is allowed to be evicted
    * @return true if it's OK to evict, or false if currently pinned
    */
-  auto IsEvictable() -> bool;
+  auto IsEvictable() const -> bool;
 
   /**
    * @brief Set the bool flag for this frame if it's evictable or not
@@ -64,26 +79,60 @@ class LRUKFrameRecord {
    * @brief Get the k-th last access time, or Infinity if not enough access time so far
    * @return k-th last access time or infinity
    */
-  auto LastKAccessTime() -> uint64_t;
+  auto LastKAccessTime() const -> uint64_t;
 
   /**
    * @brief Get the EarliestAccessTime access time, regardless of whether there is enough k access time
    * @precondition this record must not have been accessed more than k times
    * @return the earliest timestamp
    */
-  auto EarliestAccessTime() -> uint64_t;
+  auto EarliestAccessTime() const -> uint64_t;
 
   /**
    * @brief Get the frame id for this frame record
    * @return the id
    */
-  auto GetFrameId() -> size_t;
+  auto GetFrameId() const -> size_t;
+
+  /**
+   * @brief Get the size of access record queue
+   * @return size of access record queue
+   */
+  auto AccessSize() const -> size_t;
+
+  /**
+   * @brief Get the K parameter in LRU-K
+   * @return k
+   */
+  auto GetK() const -> size_t;
 
  private:
   bool is_evictable_{false};
   size_t frame_id_;
   size_t k_;
   std::queue<uint64_t> access_records_;
+};
+
+struct FrameComp {
+  auto operator()(const std::shared_ptr<LRUKFrameRecord> &lhs, const std::shared_ptr<LRUKFrameRecord> &rhs) const
+      -> bool {
+    // comparator for comparing 2 frame records
+    size_t k = lhs->GetK();
+    size_t lhs_size = lhs->AccessSize();
+    size_t rhs_size = rhs->AccessSize();
+    if (lhs_size < k && rhs_size < k) {
+      // two premature frames
+      return lhs->EarliestAccessTime() < rhs->EarliestAccessTime();
+    }
+    if (lhs_size == k && rhs_size < k) {
+      return false;
+    }
+    if (lhs_size < k && rhs_size == k) {
+      return true;
+    }
+    // two mature frames
+    return lhs->LastKAccessTime() < rhs->LastKAccessTime();
+  };
 };
 
 /**
@@ -203,10 +252,12 @@ class LRUKReplacer {
   uint64_t curr_time_{0};    // curr timestamp
   size_t curr_size_{0};      // how many frames in the replacer
   size_t replacer_size_{0};  // how many evictable frames in the replacer
-  size_t num_frames_;        // the size range
   size_t k_;                 // the k as in LRU-K
   std::mutex latch_;
   std::vector<std::shared_ptr<LRUKFrameRecord>> frames_;
+  // a special data structure containing all evictable frames in sorted order
+  // by custom comparator
+  std::set<std::shared_ptr<LRUKFrameRecord>, FrameComp> lru_set_;
 };
 
 }  // namespace bustub
