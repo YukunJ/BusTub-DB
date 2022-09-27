@@ -16,6 +16,7 @@
 #include <mutex>  // NOLINT
 #include <unordered_map>
 
+#include <iostream>
 #include "buffer/buffer_pool_manager.h"
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
@@ -23,7 +24,6 @@
 #include "recovery/log_manager.h"
 #include "storage/disk/disk_manager.h"
 #include "storage/page/page.h"
-
 namespace bustub {
 
 /**
@@ -176,6 +176,12 @@ class BufferPoolManagerInstance : public BufferPoolManager {
     // This is a no-nop right now without a more complex data structure to track deallocated pages
   }
 
-  // TODO(student): You may add additional private members and helper functions
+ private:
+  /**
+   * @brief Try to find a victim frame to be evicted out to make space
+   * @param[out] available_frame_id if find victim, output its id
+   * @return true if found victim, false otherwise
+   */
+  auto FindVictim(frame_id_t *available_frame_id) -> bool;
 };
 }  // namespace bustub
