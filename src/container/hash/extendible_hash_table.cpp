@@ -129,10 +129,10 @@ auto ExtendibleHashTable<K, V>::RedistributeBucket(std::shared_ptr<Bucket> bucke
     }
   }
 
-  for (const auto &[k, v] : bucket->GetItems()) {
+  for (auto it = bucket->list_.rbegin(); it != bucket->list_.rend(); it++) {
     // each will have a new hash index, re-distribute items in old bucket
-    auto item_index = IndexOf(k);
-    dir_[item_index]->Insert(k, v);
+    auto item_index = IndexOf(it->first);
+    dir_[item_index]->Insert(it->first, it->second);
   }
 }
 
@@ -178,7 +178,7 @@ auto ExtendibleHashTable<K, V>::Bucket::Insert(const K &key, const V &value) -> 
   if (IsFull()) {
     return false;
   }
-  list_.emplace_back(key, value);
+  list_.emplace_front(key, value);  // locality
   return true;
 }
 

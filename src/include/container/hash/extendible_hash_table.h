@@ -135,10 +135,11 @@ class ExtendibleHashTable : public HashTable<K, V> {
      */
     auto Insert(const K &key, const V &value) -> bool;
 
+    std::list<std::pair<K, V>> list_;  // for reverse iterator
+
    private:
     size_t size_;
     int depth_;
-    std::list<std::pair<K, V>> list_;
   };
 
  private:

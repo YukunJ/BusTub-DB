@@ -63,7 +63,7 @@ auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
   }
   auto first_iter = lru_set_.begin();
   frame_id_t removed_frame_id = (*first_iter)->GetFrameId();
-  DeallocateFrameRecord(removed_frame_id);
+  DeallocateFrameRecord(first_iter);
   *frame_id = removed_frame_id;
   return true;
 }
@@ -76,12 +76,16 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
   // careful here that, if you made change to frame
   // the set might contain duplicate, because "old version" and "new version" deemed different
   // therefore, first remove, make changes, and then add it back
+  container_iterator iter;
+  container_iterator next_iter;
   if (frames_[frame_id]->IsEvictable()) {
-    lru_set_.erase(frames_[frame_id]);
+    iter = lru_set_.find(frames_[frame_id]);
+    next_iter = lru_set_.erase(iter);
   }
   frames_[frame_id]->Access(CurrTime());
   if (frames_[frame_id]->IsEvictable()) {
-    lru_set_.insert(frames_[frame_id]);
+    // use hint to speed up insertion
+    lru_set_.emplace_hint(next_iter, frames_[frame_id]);
   }
 }
 
@@ -125,6 +129,13 @@ auto LRUKReplacer::DeallocateFrameRecord(size_t frame_id) -> void {
   frames_[frame_id] = nullptr;
   curr_size_--;
   replacer_size_--;
+}
+
+auto LRUKReplacer::DeallocateFrameRecord(LRUKReplacer::container_iterator it) -> LRUKReplacer::container_iterator {
+  frames_[(*it)->GetFrameId()] = nullptr;
+  curr_size_--;
+  replacer_size_--;
+  return lru_set_.erase(it);
 }
 
 }  // namespace bustub
