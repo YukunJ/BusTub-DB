@@ -26,9 +26,8 @@ BufferPoolManagerInstance::BufferPoolManagerInstance(size_t pool_size, DiskManag
   replacer_ = new LRUKReplacer(pool_size, replacer_k);
 
   // Initially, every page is in the free list.
-  for (size_t i = 0; i < pool_size_; ++i) {
-    free_list_.emplace_back(static_cast<int>(i));
-  }
+  free_list_.resize(pool_size);
+  std::iota(free_list_.begin(), free_list_.end(), 0);
 }
 
 BufferPoolManagerInstance::~BufferPoolManagerInstance() {
@@ -166,7 +165,7 @@ auto BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) -> bool {
   // stop track in the replacer
   replacer_->Remove(frame_id);
   // add this frame back to freelist
-  free_list_.emplace_back(static_cast<int>(frame_id));
+  free_list_.push_back(frame_id);
   // reset metadata
   pages_[frame_id].ResetMemory();
   pages_[frame_id].page_id_ = INVALID_PAGE_ID;
@@ -182,8 +181,8 @@ auto BufferPoolManagerInstance::AllocatePage() -> page_id_t { return next_page_i
 auto BufferPoolManagerInstance::FindVictim(frame_id_t *available_frame_id) -> bool {
   if (!free_list_.empty()) {
     // pick the first free frame
-    *available_frame_id = free_list_.front();
-    free_list_.pop_front();
+    *available_frame_id = free_list_.back();
+    free_list_.pop_back();
     return true;
   }
   // try evict a page
