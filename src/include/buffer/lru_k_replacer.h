@@ -147,8 +147,6 @@ struct FrameComp {
  * classical LRU algorithm is used to choose victim.
  */
 class LRUKReplacer {
-  using container_iterator = std::set<std::shared_ptr<LRUKFrameRecord>, FrameComp>::iterator;
-
  public:
   /**
    * @brief a new LRUKReplacer.
@@ -246,17 +244,10 @@ class LRUKReplacer {
   auto AllocateFrameRecord(size_t frame_id) -> void;
 
   /**
-   * @brief remove a frame by id and reduce the size
+   * @brief allocate a new frame at index and increase the size
    * @param frame_id the index to be deallocated
    */
   auto DeallocateFrameRecord(size_t frame_id) -> void;
-
-  /**
-   * @brief remove a frame by iterator and reduce the size
-   * @param frame_id the index to be deallocated
-   * @return the next iterator following the one erase, used as hint for insertion
-   */
-  auto DeallocateFrameRecord(container_iterator it) -> container_iterator;
 
   uint64_t curr_time_{0};    // curr timestamp
   size_t curr_size_{0};      // how many frames in the replacer
