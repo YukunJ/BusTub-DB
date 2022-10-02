@@ -11,22 +11,18 @@
 //===----------------------------------------------------------------------===//
 
 /**
- * Version2: Optimization attempt
- * In original version, we keep an array of frame records
- * everytime we want to search, we iterate over and try to find a victim
- * and we can update frame's status directly through the array indexing
- * which gives: search O(n) and write O(1) time complexity
- *
- * We are not sure if the system is read-heavy or write-heavy. We will try an alternative design here
- * we will maintain two separate ordered container (std::set) for record with enough k access, and not enough k access
- * This will involve a bit more engineering effort,
- * since we will need to move thing around back and forth between the two containers
- * which gives: search O(1) and write O(logn) time complexity
+ * Version3: Optimization attempt
+ * Use two separate priority for pre-mature and mature frames management
+ * For frame less than k access, their priority will not change even if we access them
+ * When a frame reach k access, remove from the pre-mature queue and add to mature queue
+ * For frame with enough k access, they need to be removed and re-insert into queue after access update
+ * And we switch to restore raw pointer instead of std::shared_ptr for performance enhancement
  */
 
 #pragma once
 
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <list>
 #include <memory>
@@ -100,12 +96,6 @@ class LRUKFrameRecord {
    */
   auto AccessSize() const -> size_t;
 
-  /**
-   * @brief Get the K parameter in LRU-K
-   * @return k
-   */
-  auto GetK() const -> size_t;
-
  private:
   bool is_evictable_{false};
   size_t frame_id_;
@@ -113,26 +103,18 @@ class LRUKFrameRecord {
   std::queue<uint64_t> access_records_;
 };
 
-struct FrameComp {
-  auto operator()(const std::shared_ptr<LRUKFrameRecord> &lhs, const std::shared_ptr<LRUKFrameRecord> &rhs) const
-      -> bool {
-    // comparator for comparing 2 frame records
-    size_t k = lhs->GetK();
-    size_t lhs_size = lhs->AccessSize();
-    size_t rhs_size = rhs->AccessSize();
-    if (lhs_size < k && rhs_size < k) {
-      // two premature frames
-      return lhs->EarliestAccessTime() < rhs->EarliestAccessTime();
-    }
-    if (lhs_size == k && rhs_size < k) {
-      return false;
-    }
-    if (lhs_size < k && rhs_size == k) {
-      return true;
-    }
-    // two mature frames
+struct PrematureFrameComp {
+  auto operator()(const LRUKFrameRecord *lhs, const LRUKFrameRecord *rhs) const -> bool {
+    // compare two premature frame, only depends on their first entry time
+    return lhs->EarliestAccessTime() < rhs->EarliestAccessTime();
+  }
+};
+
+struct MatureFrameComp {
+  auto operator()(const LRUKFrameRecord *lhs, const LRUKFrameRecord *rhs) const -> bool {
+    // compare two mature frame, only depends on their last k access timestamp
     return lhs->LastKAccessTime() < rhs->LastKAccessTime();
-  };
+  }
 };
 
 /**
@@ -147,7 +129,7 @@ struct FrameComp {
  * classical LRU algorithm is used to choose victim.
  */
 class LRUKReplacer {
-  using container_iterator = std::set<std::shared_ptr<LRUKFrameRecord>, FrameComp>::iterator;
+  using container_iterator = std::set<LRUKFrameRecord *>::iterator;
 
  public:
   /**
@@ -159,9 +141,13 @@ class LRUKReplacer {
   DISALLOW_COPY_AND_MOVE(LRUKReplacer);
 
   /**
-   * @brief Destroys the LRUReplacer.
+   * @brief Destroys the LRUReplacer. Free all the frames dynamically allocated on heap
    */
-  ~LRUKReplacer() = default;
+  ~LRUKReplacer() {
+    for (auto &frame : frames_) {
+      delete frame;
+    }
+  }
 
   /**
    * @brief Find the frame with largest backward k-distance and evict that frame. Only frames
@@ -248,25 +234,27 @@ class LRUKReplacer {
   /**
    * @brief remove a frame by id and reduce the size
    * @param frame_id the index to be deallocated
+   * @param is_premature if this iterator belongs to premature set or mature set
    */
-  auto DeallocateFrameRecord(size_t frame_id) -> void;
+  auto DeallocateFrameRecord(size_t frame_id, bool is_premature) -> void;
 
   /**
    * @brief remove a frame by iterator and reduce the size
    * @param frame_id the index to be deallocated
-   * @return the next iterator following the one erase, used as hint for insertion
+   * @param is_premature if this iterator belongs to premature set or mature set
    */
-  auto DeallocateFrameRecord(container_iterator it) -> container_iterator;
+  auto DeallocateFrameRecord(container_iterator it, bool is_premature) -> void;
 
   uint64_t curr_time_{0};    // curr timestamp
   size_t curr_size_{0};      // how many frames in the replacer
   size_t replacer_size_{0};  // how many evictable frames in the replacer
   size_t k_;                 // the k as in LRU-K
   std::mutex latch_;
-  std::vector<std::shared_ptr<LRUKFrameRecord>> frames_;
-  // a special data structure containing all evictable frames in sorted order
+  std::vector<LRUKFrameRecord *> frames_;
+  // two special data structures containing all evictable frames in sorted order
   // by custom comparator
-  std::set<std::shared_ptr<LRUKFrameRecord>, FrameComp> lru_set_;
+  std::set<LRUKFrameRecord *, PrematureFrameComp> lru_premature_;
+  std::set<LRUKFrameRecord *, MatureFrameComp> lru_mature_;
 };
 
 }  // namespace bustub
