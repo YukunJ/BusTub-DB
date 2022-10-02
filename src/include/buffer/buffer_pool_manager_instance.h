@@ -11,12 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-
-#include <list>
-#include <mutex>  // NOLINT
-#include <unordered_map>
-
 #include <iostream>
+#include <mutex>  // NOLINT
+#include <numeric>
+#include <unordered_map>
+#include <vector>
 #include "buffer/buffer_pool_manager.h"
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
@@ -145,7 +144,7 @@ class BufferPoolManagerInstance : public BufferPoolManager {
   /** The next page id to be allocated  */
   std::atomic<page_id_t> next_page_id_ = 0;
   /** Bucket size for the extendible hash table */
-  const size_t bucket_size_ = 4;
+  const size_t bucket_size_ = 5;
 
   /** Array of buffer pool pages. */
   Page *pages_;
@@ -158,7 +157,7 @@ class BufferPoolManagerInstance : public BufferPoolManager {
   /** Replacer to find unpinned pages for replacement. */
   LRUKReplacer *replacer_;
   /** List of free frames that don't have any pages on them. */
-  std::list<frame_id_t> free_list_;
+  std::vector<frame_id_t> free_list_;
   /** This latch protects shared data structures. We recommend updating this comment to describe what it protects. */
   std::mutex latch_;
 
