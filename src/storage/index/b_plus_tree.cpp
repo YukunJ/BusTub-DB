@@ -21,7 +21,7 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
  * Helper function to decide whether current b+tree is empty
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return true; }
+auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return root_page_id_ == INVALID_PAGE_ID; }
 /*****************************************************************************
  * SEARCH
  *****************************************************************************/
@@ -32,7 +32,19 @@ auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return true; }
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) -> bool {
-  return false;
+  if (IsEmpty()) {
+    return false;
+  }
+  bool found = false;
+  auto leaf_page = FindLeafPage(key);
+  for (auto i = 0; i < leaf_page->GetSize(); i++) {
+    if (comparator_(key, leaf_page->KeyAt(i)) == 0) {
+      result->push_back(leaf_page->ValueAt(i));
+      found = true;
+    }
+  }
+  buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
+  return found;
 }
 
 /*****************************************************************************
@@ -47,6 +59,10 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) -> bool {
+  if (IsEmpty()) {
+    InitBPlusTree(key, value);
+    return true;
+  }
   return false;
 }
 
@@ -94,11 +110,64 @@ auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE { return INDEXITERATOR_TYPE(); 
  * @return Page id of the root of this tree
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::GetRootPageId() -> page_id_t { return 0; }
+auto BPLUSTREE_TYPE::GetRootPageId() -> page_id_t { return root_page_id_; }
 
 /*****************************************************************************
  * UTILITIES AND DEBUG
  *****************************************************************************/
+
+/**
+ * Initialize a B+ Tree from empty state, update root_page accordingly
+ * @tparam KeyType
+ * @tparam ValueType
+ * @tparam KeyComparator
+ * @param key
+ * @param value
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::InitBPlusTree(const KeyType &key, const ValueType &value) -> void {
+  /*
+   * Ask for a new page from bpm (which will have pin count = 1)
+   * and set this page to be B+ Leaf Page and insert first key-value pair into it
+   * update the header page root_idx and unpin this page with dirty flag
+   */
+ auto new_page = buffer_pool_manager_->NewPage(&root_page_id_);
+ BUSTUB_ASSERT(new_page != nullptr, "new_page != nullptr");
+ BUSTUB_ASSERT(root_page_id_ != INVALID_PAGE_ID, "root_page_id_ != INVALID_PAGE_ID");
+ UpdateRootPageId(root_page_id_);
+ auto tree_page = reinterpret_cast<BPlusTreeLeafPage<KeyType, RID, KeyComparator> *>(new_page->GetData());
+ tree_page->Init(root_page_id_, INVALID_PAGE_ID, leaf_max_size_);
+ tree_page->Insert(key, value);
+ buffer_pool_manager_->UnpinPage(root_page_id_, true);
+}
+
+/**
+ * Iterate through the B+ Tree to fetch a leaf page
+ * the caller should unpin the leaf page after usage
+ * @tparam KeyType
+ * @tparam ValueType
+ * @tparam KeyComparator
+ * @param key
+ * @return pointer to a leaf page if found, nullptr otherwise
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &key)
+    -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> * {
+  BUSTUB_ASSERT(root_page_id_ != INVALID_PAGE_ID, "root_page_id_ != INVALID_PAGE_ID");
+  auto curr_page = FetchBPlusTreePage(root_page_id_);
+  decltype(curr_page) next_page = nullptr;
+  while (!curr_page->IsLeafPage()) {
+    auto curr_page_internal = ReinterpretAsInternalPage(curr_page);
+    page_id_t jump_pid = curr_page_internal->SearchPage(key, comparator_);
+    BUSTUB_ASSERT(jump_pid != INVALID_PAGE_ID, "jump_pid != INVALID_PAGE_ID");
+    next_page = FetchBPlusTreePage(jump_pid);
+    buffer_pool_manager_->UnpinPage(curr_page->GetPageId(), false);
+    curr_page = next_page;
+  }
+  BUSTUB_ASSERT(curr_page->IsLeafPage(), "curr_page->IsLeafPage()");
+  return ReinterpretAsLeafPage(curr_page);
+}
+
 /*
  * Update/Insert root page id in header page(where page_id = 0, header_page is
  * defined under include/page/header_page.h)
@@ -118,6 +187,35 @@ void BPLUSTREE_TYPE::UpdateRootPageId(int insert_record) {
     header_page->UpdateRecord(index_name_, root_page_id_);
   }
   buffer_pool_manager_->UnpinPage(HEADER_PAGE_ID, true);
+}
+
+/**
+ * Fetch a page using bufferPoolManager
+ * and return it in the form of Base Class BPlusTreePage
+ * User could further reinterpret_cast the page based on page type
+ * @tparam KeyType
+ * @tparam ValueType
+ * @tparam KeyComparator
+ * @param page_id the page id to be fetched from buffer pool manager
+ * @return pointer to BPlusTreePage, to be further reinterpreted by caller function
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage * {
+  return reinterpret_cast<BPlusTreePage *>(buffer_pool_manager_->FetchPage(page_id)->GetData());
+}
+
+/** Cast a Base BPlusTree Page to LeafPage */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::ReinterpretAsLeafPage(BPlusTreePage *page)
+    -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> * {
+  return reinterpret_cast<BPlusTreeLeafPage<KeyType, RID, KeyComparator> *>(page);
+}
+
+/** Cast a Base BPlusTree Page to InternalPage */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::ReinterpretAsInternalPage(BPlusTreePage *page)
+    -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> * {
+  return reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *>(page);
 }
 
 /*
