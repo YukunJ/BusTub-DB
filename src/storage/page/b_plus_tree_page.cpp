@@ -46,7 +46,7 @@ auto BPlusTreePage::GetMinSize() const -> int { return max_size_ / 2; }
 /*
  * Helper methods to get/set parent page id
  */
-auto BPlusTreePage::GetParentPageId() const -> page_id_t { return 0; }
+auto BPlusTreePage::GetParentPageId() const -> page_id_t { return parent_page_id_; }
 void BPlusTreePage::SetParentPageId(page_id_t parent_page_id) { parent_page_id_ = parent_page_id; }
 
 /*

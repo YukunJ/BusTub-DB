@@ -28,6 +28,7 @@ namespace bustub {
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, int max_size) {
+  std::cout << "In leaf init, setting parent to " << parent_id << std::endl;
   SetPageType(IndexPageType::LEAF_PAGE);
   SetPageId(page_id);
   SetNextPageId(INVALID_PAGE_ID);
@@ -70,12 +71,72 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::SetValueAt(int index,
   array_[index].second = value;
 }
 
+/*
+ * Insert a key-value pair into the Leaf Page
+ * return False if this key is duplicate
+ */
 INDEX_TEMPLATE_ARGUMENTS
-void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType &key, const ValueType &value) {
-  // TODO(YukunJ): switch to sorted binary insert
-  SetKeyAt(GetSize(), key);
-  SetValueAt(GetSize(), value);
+auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType &key, const ValueType &value,
+                                                                  KeyComparator &comparator) -> bool {
+  // TODO(YukunJ): switch to binary insert
+  // need to maintain sorted order
+  std::cout << "Calling Leaf Insert on page " << GetPageId() << std::endl;
+  auto insert_idx = GetSize();  // initial assume at right-hand most
+  for (int i = 0; i < GetSize(); i++) {
+    auto comp_res = comparator(key, KeyAt(i));
+    if (comp_res == 0) {
+      return false;  // duplicate key
+    }
+    if (comp_res < 0) {
+      insert_idx = i;
+      break;
+    }
+  }
+  ExcavateIndex(insert_idx);
+  SetKeyAt(insert_idx, key);
+  SetValueAt(insert_idx, value);
   IncreaseSize(1);
+  return true;
+}
+
+/*
+ * Shift all elements starting from index to right by 1 position
+ * so that index end up with an empty hole for insert
+ * but will not increase the size, it's up to the caller to do so
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int index) {
+  // TODO(YukunJ): Consider use std::copy_backward
+  for (auto i = GetSize(); i > index; i--) {
+    array_[i] = array_[i - 1];
+  }
+}
+
+/*
+ * Shift all elements starting from index to left by 1 position
+ * essentially cover index-1, assuming it's deleted
+ * but will not decrease the size, it's up to the caller to do so
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) {
+  // TODO(YukunJ): Consider use std::copy
+  for (auto i = index; i < GetSize(); i++) {
+    array_[i - 1] = array_[i];
+  }
+}
+
+/*
+ * How many bytes each key-value pair takes
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::GetMappingSize() -> size_t { return sizeof(MappingType); }
+
+/*
+ * Expose a handler of the underlying data array for manipulation
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::GetArray() -> char * {
+  return reinterpret_cast<char *>(&array_[0]);
 }
 
 template class BPlusTreeLeafPage<GenericKey<4>, RID, GenericComparator<4>>;

@@ -29,7 +29,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id
   SetPageType(IndexPageType::INTERNAL_PAGE);
   SetPageId(page_id);
   SetParentPageId(parent_id);
-  SetSize(0);
+  SetSize(1);  // the first entry with invalid key and negative infinity pointer
   SetMaxSize(max_size);
 }
 
@@ -60,7 +60,8 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SetValueAt(int in
  * and return next level page id
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const KeyType &key, KeyComparator& comparator) -> ValueType {
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const KeyType &key, KeyComparator &comparator)
+    -> ValueType {
   // TODO(YukunJ): Support binary search
   // find smallest i s.t. key <= curr_page[i].key
   auto bigger_or_equal_key_idx = -1;
@@ -86,6 +87,54 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const 
     }
   }
   return ValueAt(jump_idx);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType &key, const ValueType &value,
+                                                                      KeyComparator &comparator) -> bool {
+  // TODO(YukunJ): switch to binary insert
+  // need to maintain sorted order
+  std::cout << "Calling Internal Insert on page " << GetPageId() << std::endl;
+  auto insert_idx = GetSize();  // initial assume at right-hand most
+  for (int i = 1; i < GetSize(); i++) {
+    auto comp_res = comparator(key, KeyAt(i));
+    if (comp_res == 0) {
+      return false;  // duplicate key
+    }
+    if (comp_res < 0) {
+      insert_idx = i;
+      break;
+    }
+  }
+  ExcavateIndex(insert_idx);
+  SetKeyAt(insert_idx, key);
+  SetValueAt(insert_idx, value);
+  IncreaseSize(1);
+  return true;
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::GetMappingSize() -> size_t {
+  return sizeof(MappingType);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::GetArray() -> char * {
+  return reinterpret_cast<char *>(&array_[0]);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int index) {
+  for (auto i = GetSize(); i > index; i--) {
+    array_[i] = array_[i - 1];
+  }
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) {
+  for (auto i = index; i < GetSize(); i++) {
+    array_[i - 1] = array_[i];
+  }
 }
 
 // valuetype for internalNode should be page id_t

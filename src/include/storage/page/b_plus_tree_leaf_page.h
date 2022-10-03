@@ -44,7 +44,7 @@ class BPlusTreeLeafPage : public BPlusTreePage {
  public:
   // After creating a new leaf page from buffer pool, must call initialize
   // method to set default values
-  void Init(page_id_t page_id, page_id_t parent_id = INVALID_PAGE_ID, int max_size = LEAF_PAGE_SIZE);
+  void Init(page_id_t page_id, page_id_t parent_id, int max_size);
   // helper methods
   auto GetNextPageId() const -> page_id_t;
   void SetNextPageId(page_id_t next_page_id);
@@ -52,8 +52,14 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   void SetKeyAt(int index, const KeyType &key);
   auto ValueAt(int index) const -> ValueType;
   void SetValueAt(int index, const ValueType &value);
-  void Insert(const KeyType& key, const ValueType& value);
+  auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
+  auto GetMappingSize() -> size_t;
+  auto GetArray() -> char *;
+
  private:
+  void ExcavateIndex(int index);
+  void FillIndex(int index);
+
   page_id_t next_page_id_;
   // Flexible array member for page data.
   MappingType array_[1];
