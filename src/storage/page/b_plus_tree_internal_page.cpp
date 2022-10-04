@@ -121,6 +121,20 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::Insert(const KeyT
   return true;
 }
 
+/*
+ * The page full, move the latter half to a newly-created sibling page
+ * and properly change both self and sibling page size
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfTo(BPlusTreeInternalPage *recipient) {
+  BUSTUB_ASSERT(GetSize() == GetMaxSize(), "GetSize() == GetMaxSize()");
+  auto size_retain = GetMaxSize() / 2 + (GetMaxSize() % 2 != 0);  // round up
+  auto size_move = GetMaxSize() - size_retain;
+  std::copy(&array_[size_retain], &array_[GetSize()], recipient->array_);
+  SetSize(size_retain);
+  recipient->SetSize(size_move);
+}
+
 INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::GetMappingSize() -> size_t {
   return sizeof(MappingType);

@@ -123,6 +123,24 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) 
 }
 
 /*
+ * The page full, move the latter half to a newly-created sibling page
+ * and properly change both self and sibling page size
+ * and set self's next page to be that sibling page
+ * and sibling's next page to self's original next page
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfTo(BPlusTreeLeafPage *recipient) {
+  BUSTUB_ASSERT(GetSize() == GetMaxSize(), "GetSize() == GetMaxSize()");
+  auto size_retain = GetMaxSize() / 2 + (GetMaxSize() % 2 != 0);  // round up
+  auto size_move = GetMaxSize() - size_retain;
+  std::copy(&array_[size_retain], &array_[GetSize()], recipient->array_);
+  SetSize(size_retain);
+  recipient->SetSize(size_move);
+  recipient->SetNextPageId(GetNextPageId());
+  SetNextPageId(recipient->GetPageId());
+}
+
+/*
  * How many bytes each key-value pair takes
  */
 INDEX_TEMPLATE_ARGUMENTS

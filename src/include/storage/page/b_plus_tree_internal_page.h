@@ -44,6 +44,7 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   void SetValueAt(int index, const ValueType &value);
   auto SearchPage(const KeyType &key, KeyComparator &comparator) -> ValueType;
   auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
+  void MoveLatterHalfTo(BPlusTreeInternalPage *recipient);
   auto GetMappingSize() -> size_t;
   auto GetArray() -> char *;
 

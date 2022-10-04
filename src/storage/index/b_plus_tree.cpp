@@ -83,24 +83,9 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
   }
   if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
     // overflow, need split
-    // TODO(YukunJ): abstract the copying functionality into member functions of B+ Tree Page
-    //               instead of raw manipulation
-    auto mapping_size = leaf_page->GetMappingSize();
-    auto cpy_size = leaf_page->GetMaxSize() * mapping_size;
-    char temp[cpy_size];
-    memcpy(temp, static_cast<const char *>(leaf_page->GetArray()), cpy_size);
     auto leaf_page_prime = CreateLeafPage();
-    // leaf -> leaf_prime -> leaf's origin next
-    leaf_page_prime->SetNextPageId(leaf_page->GetNextPageId());
-    leaf_page_prime->SetParentPageId(leaf_page->GetParentPageId());  // same parent
-    leaf_page->SetNextPageId(leaf_page_prime->GetPageId());
-    auto size_retain_in_leaf = leaf_page->GetMaxSize() / 2 + (leaf_page->GetMaxSize() % 2 != 0);  // round up
-    auto size_retain_in_prime = leaf_page->GetMaxSize() - size_retain_in_leaf;
-    leaf_page->SetSize(size_retain_in_leaf);
-    leaf_page_prime->SetSize(size_retain_in_prime);
-    memcpy(leaf_page->GetArray(), static_cast<const char *>(temp), size_retain_in_leaf * mapping_size);
-    memcpy(leaf_page_prime->GetArray(), static_cast<const char *>(&temp[size_retain_in_leaf * mapping_size]),
-           size_retain_in_prime * mapping_size);
+    leaf_page->MoveLatterHalfTo(leaf_page_prime);
+    leaf_page_prime->SetParentPageId(leaf_page->GetParentPageId());  // same parent by default
     const auto key_upward = leaf_page_prime->KeyAt(0);
     InsertInParent(leaf_page, leaf_page_prime, key_upward);
     buffer_pool_manager_->UnpinPage(leaf_page_prime->GetPageId(), true);
@@ -274,24 +259,11 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
   auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(left_page->GetParentPageId()));
   parent_page->Insert(upward_key, right_page->GetPageId(), comparator_);
   if (parent_page->GetSize() == parent_page->GetMaxSize()) {
-    // TODO(YukunJ): duplicate code with Insert main procedure, only differ in Leaf/Interal Type
-    //               try factor it out later
     // overflow in parent page, split parent page
     // parent page is definitely internal page, be careful of the 0-index invalid key
-    auto mapping_size = parent_page->GetMappingSize();
-    auto cpy_size = parent_page->GetMaxSize() * mapping_size;
-    char temp[cpy_size];
-    memcpy(temp, static_cast<const char *>(parent_page->GetArray()), cpy_size);
     auto parent_page_prime = CreateInternalPage();
-    parent_page_prime->SetParentPageId(parent_page->GetParentPageId());                                 // same parent
-    auto size_retain_in_parent = parent_page->GetMaxSize() / 2 + (parent_page->GetMaxSize() % 2 != 0);  // round up
-    auto size_retain_in_prime = parent_page->GetMaxSize() - size_retain_in_parent;
-    parent_page->SetSize(size_retain_in_parent);
-    parent_page_prime->SetSize(size_retain_in_prime);
-    memcpy(parent_page->GetArray(), static_cast<const char *>(temp), size_retain_in_parent * mapping_size);
-    memcpy(parent_page_prime->GetArray(), static_cast<const char *>(&temp[size_retain_in_parent * mapping_size]),
-           size_retain_in_prime * mapping_size);
-    const auto further_upward_key = parent_page->KeyAt(size_retain_in_parent);
+    parent_page->MoveLatterHalfTo(parent_page_prime);
+    const auto further_upward_key = parent_page_prime->KeyAt(0);  // actually invalid 0-indexed key
     if (comparator_(upward_key, further_upward_key) >= 0) {
       right_page->SetParentPageId(parent_page_prime->GetPageId());
     } else {
