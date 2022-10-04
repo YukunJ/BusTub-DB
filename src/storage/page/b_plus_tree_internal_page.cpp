@@ -133,16 +133,12 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::GetArray() -> cha
 
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int index) {
-  for (auto i = GetSize(); i > index; i--) {
-    array_[i] = array_[i - 1];
-  }
+  std::copy_backward(array_ + index, array_ + GetSize(), array_ + GetSize() + 1);
 }
 
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) {
-  for (auto i = index; i < GetSize(); i++) {
-    array_[i - 1] = array_[i];
-  }
+  std::copy(array_ + index, array_ + GetSize(), array_ + index - 1);
 }
 
 // valuetype for internalNode should be page id_t

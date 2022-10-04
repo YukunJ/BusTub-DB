@@ -109,10 +109,7 @@ auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType 
  */
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int index) {
-  // TODO(YukunJ): Consider use std::copy_backward
-  for (auto i = GetSize(); i > index; i--) {
-    array_[i] = array_[i - 1];
-  }
+  std::copy_backward(array_ + index, array_ + GetSize(), array_ + GetSize() + 1);
 }
 
 /*
@@ -122,10 +119,7 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int ind
  */
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) {
-  // TODO(YukunJ): Consider use std::copy
-  for (auto i = index; i < GetSize(); i++) {
-    array_[i - 1] = array_[i];
-  }
+  std::copy(array_ + index, array_ + GetSize(), array_ + index - 1);
 }
 
 /*
