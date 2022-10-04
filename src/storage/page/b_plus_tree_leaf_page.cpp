@@ -28,7 +28,6 @@ namespace bustub {
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, int max_size) {
-  std::cout << "In leaf init, setting parent to " << parent_id << std::endl;
   SetPageType(IndexPageType::LEAF_PAGE);
   SetPageId(page_id);
   SetNextPageId(INVALID_PAGE_ID);
@@ -78,18 +77,22 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::SetValueAt(int index,
 INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType &key, const ValueType &value,
                                                                   KeyComparator &comparator) -> bool {
-  // TODO(YukunJ): switch to binary insert
   // need to maintain sorted order
-  std::cout << "Calling Leaf Insert on page " << GetPageId() << std::endl;
   auto insert_idx = GetSize();  // initial assume at right-hand most
-  for (int i = 0; i < GetSize(); i++) {
-    auto comp_res = comparator(key, KeyAt(i));
+  auto left = 0;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    // bindary search
+    auto mid = left + (right - left) / 2;
+    auto comp_res = comparator(key, KeyAt(mid));
     if (comp_res == 0) {
       return false;  // duplicate key
     }
     if (comp_res < 0) {
-      insert_idx = i;
-      break;
+      insert_idx = mid;
+      right = mid - 1;
+    } else {
+      left = mid + 1;
     }
   }
   ExcavateIndex(insert_idx);

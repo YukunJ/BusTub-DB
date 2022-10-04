@@ -85,7 +85,6 @@ TEST(BPlusTreeTests, InsertTest2) {
 
   std::vector<int64_t> keys = {1, 2, 3, 4, 5};
   for (auto key : keys) {
-    std::cout << "Try Insert " << key << std::endl;
     int64_t value = key & 0xFFFFFFFF;
     rid.Set(static_cast<int32_t>(key >> 32), value);
     index_key.SetFromInteger(key);

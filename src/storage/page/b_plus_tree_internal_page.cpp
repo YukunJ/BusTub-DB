@@ -62,20 +62,23 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SetValueAt(int in
 INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const KeyType &key, KeyComparator &comparator)
     -> ValueType {
-  // TODO(YukunJ): Support binary search
   // find smallest i s.t. key <= curr_page[i].key
   auto bigger_or_equal_key_idx = -1;
-  auto exists_bigger = false;
-  for (auto i = 1; i < GetSize(); i++) {
-    // 1st key is INVALID, start from the 2nd key
-    if (comparator(key, KeyAt(i)) <= 0) {
-      bigger_or_equal_key_idx = i;
-      exists_bigger = true;
-      break;
+  auto left = 1;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    // bindary search
+    auto mid = left + (right - left) / 2;
+    if (comparator(key, KeyAt(mid)) <= 0) {
+      bigger_or_equal_key_idx = mid;
+      right = mid - 1;
+    } else {
+      left = mid + 1;
     }
   }
+
   auto jump_idx = -1;
-  if (!exists_bigger) {
+  if (bigger_or_equal_key_idx == -1) {
     jump_idx = GetSize() - 1;
   } else {
     if (comparator(key, KeyAt(bigger_or_equal_key_idx)) == 0) {
@@ -92,18 +95,23 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const 
 INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType &key, const ValueType &value,
                                                                       KeyComparator &comparator) -> bool {
-  // TODO(YukunJ): switch to binary insert
   // need to maintain sorted order
-  std::cout << "Calling Internal Insert on page " << GetPageId() << std::endl;
   auto insert_idx = GetSize();  // initial assume at right-hand most
-  for (int i = 1; i < GetSize(); i++) {
-    auto comp_res = comparator(key, KeyAt(i));
+  auto left = 1;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    // bindary search
+    auto mid = left + (right - left) / 2;
+    auto comp_res = comparator(key, KeyAt(mid));
     if (comp_res == 0) {
       return false;  // duplicate key
     }
     if (comp_res < 0) {
-      insert_idx = i;
-      break;
+      // mid might be the place
+      insert_idx = mid;
+      right = mid - 1;
+    } else {
+      left = mid + 1;
     }
   }
   ExcavateIndex(insert_idx);

@@ -37,10 +37,21 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
   }
   bool found = false;
   auto leaf_page = FindLeafPage(key);
-  for (auto i = 0; i < leaf_page->GetSize(); i++) {
-    if (comparator_(key, leaf_page->KeyAt(i)) == 0) {
-      result->push_back(leaf_page->ValueAt(i));
+  auto left = 0;
+  auto right = leaf_page->GetSize() - 1;
+  while (left <= right) {
+    // binary search
+    auto mid = left + (right - left) / 2;
+    auto comp_result = comparator_(key, leaf_page->KeyAt(mid));
+    if (comp_result == 0) {
+      result->push_back(leaf_page->ValueAt(mid));
       found = true;
+      break;
+    }
+    if (comp_result < 0) {
+      right = mid - 1;
+    } else {
+      left = mid + 1;
     }
   }
   buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
