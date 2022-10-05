@@ -55,6 +55,7 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
   auto FindKeyPosition(const KeyType &key, KeyComparator &comparator) -> int;
   auto RemoveKey(const KeyType &key, KeyComparator &comparator) -> bool;
+  void MoveAllTo(BPlusTreeLeafPage *recipient);
   void MoveLatterHalfTo(BPlusTreeLeafPage *recipient);
   void MoveFirstToEndOf(BPlusTreeLeafPage *recipient);
   void MoveLastToFrontOf(BPlusTreeLeafPage *recipient);

@@ -85,7 +85,7 @@ class BPlusTree {
 
   void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
 
-  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key);
+  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key, bool should_unpin = true);
 
   auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool;
 
@@ -95,6 +95,10 @@ class BPlusTree {
                     BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index,
                     bool sibling_on_left);
 
+  auto TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  void Merge(BPlusTreePage *base, BPlusTreePage *sibling,
+             BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index, bool sibling_on_left);
   void UpdateRootPageId(int insert_record = 0);
 
   auto FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage *;

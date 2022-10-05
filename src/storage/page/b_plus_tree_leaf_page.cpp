@@ -163,6 +163,19 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) 
 }
 
 /*
+ * Move All elements in this node to another recipient
+ * and adjust size of both sides accordingly
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::MoveAllTo(BPlusTreeLeafPage *recipient) {
+  auto recipient_size = recipient->GetSize();
+  auto size = GetSize();
+  std::copy(&array_[0], &array_[size], &recipient->array_[recipient_size]);
+  SetSize(0);
+  recipient->IncreaseSize(size);
+}
+
+/*
  * The page full, move the latter half to a newly-created sibling page
  * and properly change both self and sibling page size
  * and set self's next page to be that sibling page

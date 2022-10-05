@@ -172,6 +172,19 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::RemoveKey(const K
 }
 
 /*
+ * Move All elements in this node to another recipient
+ * and adjust size of both sides accordingly
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveAllTo(BPlusTreeInternalPage *recipient) {
+  auto recipient_size = recipient->GetSize();
+  auto size = GetSize();
+  std::copy(&array_[0], &array_[size], &recipient->array_[recipient_size]);
+  SetSize(0);
+  recipient->IncreaseSize(size);
+}
+
+/*
  * The page full, move the latter half to a newly-created sibling page
  * and properly change both self and sibling page size
  * caller should change sibling page's new childrem's parent ID to be new sibling page

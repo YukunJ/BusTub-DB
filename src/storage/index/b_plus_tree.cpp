@@ -73,7 +73,6 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) -> bool {
-  std::cout << "Insert key=" << key << std::endl;
   if (IsEmpty()) {
     InitBPlusTree(key, value);
     return true;
@@ -113,7 +112,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
   if (IsEmpty()) {
     return;
   }
-  std::cout << "Remove key=" << key << std::endl;
   auto leaf_page = FindLeafPage(key);
   RemoveEntry(leaf_page, key);
 }
@@ -295,7 +293,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
  * to be called recursively with coalesce/merge sub-helper function
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *base_page, const KeyType &key) {
+void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *base_page, const KeyType &key,
+                                                               bool should_unpin) {
   // auto is_leaf = base_page->IsLeafPage();
   auto delete_success = RemoveDependingOnType(base_page, key);
   if (!delete_success) {
@@ -331,13 +330,15 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
       // 4. merge from left
       auto redistribute_success = TryRedistribute(base_page, key);
       if (!redistribute_success) {
-        std::cout << "Cannot redistribute, resort to Merge..." << std::endl;
+        TryMerge(base_page, key);
       }
     }
   }
 
   // mark as dirty just because we remove an entry from the page
-  buffer_pool_manager_->UnpinPage(base_page->GetPageId(), true);
+  if (should_unpin) {
+    buffer_pool_manager_->UnpinPage(base_page->GetPageId(), true);
+  }
 }
 
 /*
@@ -389,8 +390,38 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryRedistribute(BPlusTreePage
     buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), redistribute_success);
   }
   buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), redistribute_success);
-  std::cout << "Run Redistribute with success code " << redistribute_success << std::endl;
   return redistribute_success;
+}
+
+/*
+ * Try to merge from right, and then left
+ * return True if merge is successful, False otherwise
+ * This function is self-cleaned, it will unpin any parent, sibling page
+ * but will not unpin the base page, which will be done in Remove() main procedure's end
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool {
+  BUSTUB_ASSERT(!base_page->IsRootPage(), "!base_page->IsRootPage()");
+  auto parent_page_id = base_page->GetParentPageId();
+  auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(parent_page_id));
+  auto underfull_index = parent_page->SearchJumpIdx(key, comparator_);
+  auto merge_success = false;
+  if (underfull_index < parent_page->GetSize() - 1) {
+    // has right sibling, definitely can merge in our logic flow
+    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
+    Merge(base_page, sibling_page, parent_page, underfull_index, false);
+    merge_success = true;
+    buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
+  }
+  if (!merge_success && underfull_index > 0) {
+    // has left sibling, definitely can merge in our logic flow
+    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
+    Merge(base_page, sibling_page, parent_page, underfull_index, true);
+    merge_success = true;
+    buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
+  }
+  buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), merge_success);
+  return merge_success;
 }
 
 /**
@@ -420,16 +451,87 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Redistribute(
     auto base_internal = ReinterpretAsInternalPage(base);
     auto sibling_internal = ReinterpretAsInternalPage(sibling);
     if (sibling_on_left) {
+      auto sibling_size = sibling_internal->GetSize();
+      // change the moved page's parent id
+      auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(sibling_size - 1));
+      moved_page->SetParentPageId(base_internal->GetPageId());
+      buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
       sibling_internal->MoveLastToFrontOf(base_internal);
       auto upward_key = base_internal->KeyAt(0);
       parent->SetKeyAt(base_index, upward_key);
     } else {
       // sibling on the right
+      // change the moved page's parent id
+      auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(0));
+      moved_page->SetParentPageId(base_internal->GetPageId());
+      buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
       sibling_internal->MoveFirstToEndOf(base_internal);
       auto parent_key = parent->KeyAt(base_index + 1);
       auto upward_key = sibling_internal->KeyAt(0);
       base_internal->SetKeyAt(base_internal->GetSize() - 1, parent_key);
       parent->SetKeyAt(base_index + 1, upward_key);
+    }
+  }
+}
+
+/**
+ * The helper function called in TryMerge()
+ * @param base the page underfull
+ * @param sibling sibling page, could be left or right of base page
+ * @param parent parent page
+ * @param base_index the base page's jump idx in parent page
+ * @param true if the sibling page is on left of the base page, false if on right
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
+    BPlusTreePage *base, BPlusTreePage *sibling, BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent,
+    int base_index, bool sibling_on_left) {
+  // also merge into left page, so that left's left page points to the correct next_page_id
+  if (base->IsLeafPage()) {
+    auto base_leaf = ReinterpretAsLeafPage(base);
+    auto sibling_leaf = ReinterpretAsLeafPage(sibling);
+    if (sibling_on_left) {
+      auto key_in_between = parent->KeyAt(base_index);
+      base_leaf->MoveAllTo(sibling_leaf);
+      sibling_leaf->SetNextPageId(base_leaf->GetNextPageId());
+      base_leaf->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
+      RemoveEntry(parent, key_in_between, false);   // don't unpin the parent page again
+    } else {
+      // sibling on the right
+      auto key_in_between = parent->KeyAt(base_index + 1);
+      sibling_leaf->MoveAllTo(base_leaf);
+      base_leaf->SetNextPageId(sibling_leaf->GetNextPageId());
+      sibling_leaf->SetParentPageId(INVALID_PAGE_ID);
+      RemoveEntry(parent, key_in_between, false);
+    }
+  } else {
+    auto base_internal = ReinterpretAsInternalPage(base);
+    auto sibling_internal = ReinterpretAsInternalPage(sibling);
+    if (sibling_on_left) {
+      auto key_in_between = parent->KeyAt(base_index);
+      auto sibling_old_size = sibling_internal->GetSize();
+      for (auto i = 0; i < base_internal->GetSize(); i++) {
+        auto moved_page = FetchBPlusTreePage(base_internal->ValueAt(i));
+        moved_page->SetParentPageId(sibling_internal->GetPageId());
+        buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
+      }
+      base_internal->MoveAllTo(sibling_internal);
+      base_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
+      sibling_internal->SetKeyAt(sibling_old_size, key_in_between);
+      RemoveEntry(parent, key_in_between, false);
+    } else {
+      // sibling on the right
+      auto key_in_between = parent->KeyAt(base_index + 1);
+      auto base_old_size = base_internal->GetSize();
+      for (auto i = 0; i < sibling_internal->GetSize(); i++) {
+        auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(i));
+        moved_page->SetParentPageId(base_internal->GetPageId());
+        buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
+      }
+      sibling_internal->MoveAllTo(base_internal);
+      sibling_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
+      base_internal->SetKeyAt(base_old_size, key_in_between);
+      RemoveEntry(parent, key_in_between, false);
     }
   }
 }
