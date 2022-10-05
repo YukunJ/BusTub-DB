@@ -75,7 +75,6 @@ class BPlusTree {
   void RemoveFromFile(const std::string &file_name, Transaction *transaction = nullptr);
 
  private:
-
   auto CreateInternalPage() -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
 
   auto CreateLeafPage() -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
@@ -88,7 +87,13 @@ class BPlusTree {
 
   void RemoveEntry(BPlusTreePage *base_page, const KeyType &key);
 
-  auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType&key) -> bool;
+  auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  auto TryRedistribute(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  void Redistribute(BPlusTreePage *base, BPlusTreePage *sibling,
+                    BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index,
+                    bool sibling_on_left);
 
   void UpdateRootPageId(int insert_record = 0);
 

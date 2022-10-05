@@ -137,7 +137,7 @@ auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::RemoveKey(const KeyTy
   if (to_delete_index == -1) {
     return false;
   }
-  FillIndex(to_delete_index + 1); // shift left by 1 starting from to_delete_index + 1
+  FillIndex(to_delete_index + 1);  // shift left by 1 starting from to_delete_index + 1
   DecreaseSize(1);
   return true;
 }
@@ -178,6 +178,32 @@ void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfTo(BPlu
   recipient->SetSize(size_move);
   recipient->SetNextPageId(GetNextPageId());
   SetNextPageId(recipient->GetPageId());
+}
+
+/*
+ * Remove my first element to the end of recipient
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::MoveFirstToEndOf(BPlusTreeLeafPage *recipient) {
+  auto recipient_size = recipient->GetSize();
+  recipient->SetKeyAt(recipient_size, KeyAt(0));
+  recipient->SetValueAt(recipient_size, ValueAt(0));
+  recipient->IncreaseSize(1);
+  FillIndex(1);
+  DecreaseSize(1);
+}
+
+/*
+ * Remove my last element to the front of recipient
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::MoveLastToFrontOf(BPlusTreeLeafPage *recipient) {
+  auto size = GetSize();
+  recipient->ExcavateIndex(0);
+  recipient->SetKeyAt(0, KeyAt(size - 1));
+  recipient->SetValueAt(0, ValueAt(size - 1));
+  recipient->IncreaseSize(1);
+  DecreaseSize(1);
 }
 
 /*

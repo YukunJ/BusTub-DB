@@ -15,7 +15,10 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
       buffer_pool_manager_(buffer_pool_manager),
       comparator_(comparator),
       leaf_max_size_(leaf_max_size),
-      internal_max_size_(internal_max_size) {std::cout << "Initialize B+ Tree with leaf_max_size=" << leaf_max_size << " and internal_max_size=" << internal_max_size << std::endl;}
+      internal_max_size_(internal_max_size) {
+  std::cout << "Initialize B+ Tree with leaf_max_size=" << leaf_max_size
+            << " and internal_max_size=" << internal_max_size << std::endl;
+}
 
 /*
  * Helper function to decide whether current b+tree is empty
@@ -70,6 +73,7 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) -> bool {
+  std::cout << "Insert key=" << key << std::endl;
   if (IsEmpty()) {
     InitBPlusTree(key, value);
     return true;
@@ -109,6 +113,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
   if (IsEmpty()) {
     return;
   }
+  std::cout << "Remove key=" << key << std::endl;
   auto leaf_page = FindLeafPage(key);
   RemoveEntry(leaf_page, key);
 }
@@ -270,12 +275,15 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     // parent page is definitely internal page, be careful of the 0-index invalid key
     auto parent_page_prime = CreateInternalPage();
     parent_page->MoveLatterHalfTo(parent_page_prime);
-    const auto further_upward_key = parent_page_prime->KeyAt(0);  // actually invalid 0-indexed key
-    if (comparator_(upward_key, further_upward_key) >= 0) {
-      right_page->SetParentPageId(parent_page_prime->GetPageId());
-    } else {
-      right_page->SetParentPageId(parent_page->GetPageId());
+    auto new_parent_page_id = parent_page_prime->GetPageId();
+    for (auto i = 0; i < parent_page_prime->GetSize(); i++) {
+      // update moved children's parent id to their new parent
+      auto child_page_id = parent_page_prime->ValueAt(i);
+      auto child_page = FetchBPlusTreePage(child_page_id);
+      child_page->SetParentPageId(new_parent_page_id);
+      buffer_pool_manager_->UnpinPage(child_page_id, true);
     }
+    const auto further_upward_key = parent_page_prime->KeyAt(0);  // actually invalid 0-indexed key
     InsertInParent(parent_page, parent_page_prime, further_upward_key);
     buffer_pool_manager_->UnpinPage(parent_page_prime->GetPageId(), true);
   }
@@ -305,7 +313,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
           root_page_id_ = ReinterpretAsInternalPage(base_page)->ValueAt(0);
           UpdateRootPageId(false);
           auto new_root_page = FetchBPlusTreePage(root_page_id_);
-          new_root_page->SetParentPageId(INVALID_PAGE_ID); // help identify self as root
+          new_root_page->SetParentPageId(INVALID_PAGE_ID);  // help identify self as root
           buffer_pool_manager_->UnpinPage(root_page_id_, true);
         }
       } else {
@@ -316,11 +324,17 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
         }
       }
     } else {
-
+      // follow the order of
+      // 1. redistribute from right
+      // 2. redistribute from left
+      // 3. merge from right
+      // 4. merge from left
+      auto redistribute_success = TryRedistribute(base_page, key);
+      if (!redistribute_success) {
+        std::cout << "Cannot redistribute, resort to Merge..." << std::endl;
+      }
     }
   }
-
-
 
   // mark as dirty just because we remove an entry from the page
   buffer_pool_manager_->UnpinPage(base_page->GetPageId(), true);
@@ -331,12 +345,93 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
  * and reinterpret + remove page + return bool flag to caller
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTree<KeyType, ValueType, KeyComparator>::RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool {
+auto BPlusTree<KeyType, ValueType, KeyComparator>::RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key)
+    -> bool {
   auto is_leaf = base_page->IsLeafPage();
   if (is_leaf) {
     return ReinterpretAsLeafPage(base_page)->RemoveKey(key, comparator_);
   }
   return ReinterpretAsInternalPage(base_page)->RemoveKey(key, comparator_);
+}
+
+/*
+ * Try to redistribute from right, and then left
+ * return True if redistribution is successfully, False otherwise
+ * This function is self-cleaned, it will unpin any parent, sibling page
+ * but will not unpin the base page, which will be done in Remove() main procedure's end
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::TryRedistribute(BPlusTreePage *base_page, const KeyType &key)
+    -> bool {
+  BUSTUB_ASSERT(!base_page->IsRootPage(), "!base_page->IsRootPage()");
+  auto parent_page_id = base_page->GetParentPageId();
+  auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(parent_page_id));
+  auto underfull_index = parent_page->SearchJumpIdx(key, comparator_);
+  auto redistribute_success = false;
+  if (underfull_index < parent_page->GetSize() - 1) {
+    // has right sibling
+    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
+    if ((sibling_page->GetSize() - 1) >= sibling_page->GetMinSize()) {
+      // stealing not leading to sibling underfull
+      Redistribute(base_page, sibling_page, parent_page, underfull_index, false);
+      redistribute_success = true;
+    }
+    buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), redistribute_success);
+  }
+  if (!redistribute_success && underfull_index > 0) {
+    // has left sibling
+    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
+    if ((sibling_page->GetSize() - 1) >= sibling_page->GetMinSize()) {
+      // stealing not leading to sibling underfull
+      Redistribute(base_page, sibling_page, parent_page, underfull_index, true);
+      redistribute_success = true;
+    }
+    buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), redistribute_success);
+  }
+  buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), redistribute_success);
+  std::cout << "Run Redistribute with success code " << redistribute_success << std::endl;
+  return redistribute_success;
+}
+
+/**
+ * The helper function called in TryRedistribute()
+ * @param base the page underfull
+ * @param sibling sibling page, could be left or right of base page
+ * @param parent parent page
+ * @param base_index the base page's jump idx in parent page
+ * @param true if the sibling page is on left of the base page, false if on right
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::Redistribute(
+    BPlusTreePage *base, BPlusTreePage *sibling, BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent,
+    int base_index, bool sibling_on_left) {
+  if (base->IsLeafPage()) {
+    auto base_leaf = ReinterpretAsLeafPage(base);
+    auto sibling_leaf = ReinterpretAsLeafPage(sibling);
+    if (sibling_on_left) {
+      sibling_leaf->MoveLastToFrontOf(base_leaf);
+      parent->SetKeyAt(base_index, base_leaf->KeyAt(0));
+    } else {
+      // sibling on the right
+      sibling_leaf->MoveFirstToEndOf(base_leaf);
+      parent->SetKeyAt(base_index + 1, sibling_leaf->KeyAt(0));
+    }
+  } else {
+    auto base_internal = ReinterpretAsInternalPage(base);
+    auto sibling_internal = ReinterpretAsInternalPage(sibling);
+    if (sibling_on_left) {
+      sibling_internal->MoveLastToFrontOf(base_internal);
+      auto upward_key = base_internal->KeyAt(0);
+      parent->SetKeyAt(base_index, upward_key);
+    } else {
+      // sibling on the right
+      sibling_internal->MoveFirstToEndOf(base_internal);
+      auto parent_key = parent->KeyAt(base_index + 1);
+      auto upward_key = sibling_internal->KeyAt(0);
+      base_internal->SetKeyAt(base_internal->GetSize() - 1, parent_key);
+      parent->SetKeyAt(base_index + 1, upward_key);
+    }
+  }
 }
 
 /*

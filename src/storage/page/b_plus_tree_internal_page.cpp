@@ -56,12 +56,11 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SetValueAt(int in
 }
 
 /*
- * Flow through the internal page based on the key and comparator
- * and return next level page id
+ * Given a key,find the jump index for which the traversal could proceed
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const KeyType &key, KeyComparator &comparator)
-    -> ValueType {
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchJumpIdx(const KeyType &key,
+                                                                             KeyComparator &comparator) -> int {
   // find smallest i s.t. key <= curr_page[i].key
   auto bigger_or_equal_key_idx = -1;
   auto left = 1;
@@ -89,7 +88,18 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const 
       jump_idx = bigger_or_equal_key_idx - 1;
     }
   }
-  return ValueAt(jump_idx);
+
+  return jump_idx;
+}
+
+/*
+ * Flow through the internal page based on the key and comparator
+ * and return next level page id
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::SearchPage(const KeyType &key, KeyComparator &comparator)
+    -> ValueType {
+  return ValueAt(SearchJumpIdx(key, comparator));
 }
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -156,7 +166,7 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::RemoveKey(const K
   if (to_delete_index == -1) {
     return false;
   }
-  FillIndex(to_delete_index + 1); // shift left by 1 starting from to_delete_index + 1
+  FillIndex(to_delete_index + 1);  // shift left by 1 starting from to_delete_index + 1
   DecreaseSize(1);
   return true;
 }
@@ -164,6 +174,7 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::RemoveKey(const K
 /*
  * The page full, move the latter half to a newly-created sibling page
  * and properly change both self and sibling page size
+ * caller should change sibling page's new childrem's parent ID to be new sibling page
  */
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfTo(BPlusTreeInternalPage *recipient) {
@@ -193,6 +204,32 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::ExcavateIndex(int
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::FillIndex(int index) {
   std::copy(array_ + index, array_ + GetSize(), array_ + index - 1);
+}
+
+/*
+ * Remove my first element to the end of recipient
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveFirstToEndOf(BPlusTreeInternalPage *recipient) {
+  auto recipient_size = recipient->GetSize();
+  recipient->SetKeyAt(recipient_size, KeyAt(0));
+  recipient->SetValueAt(recipient_size, ValueAt(0));
+  recipient->IncreaseSize(1);
+  FillIndex(1);
+  DecreaseSize(1);
+}
+
+/*
+ * Remove my last element to the front of recipient
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLastToFrontOf(BPlusTreeInternalPage *recipient) {
+  auto size = GetSize();
+  recipient->ExcavateIndex(0);
+  recipient->SetKeyAt(0, KeyAt(size - 1));
+  recipient->SetValueAt(0, ValueAt(size - 1));
+  recipient->IncreaseSize(1);
+  DecreaseSize(1);
 }
 
 // valuetype for internalNode should be page id_t

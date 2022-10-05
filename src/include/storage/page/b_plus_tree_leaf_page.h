@@ -56,6 +56,8 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   auto FindKeyPosition(const KeyType &key, KeyComparator &comparator) -> int;
   auto RemoveKey(const KeyType &key, KeyComparator &comparator) -> bool;
   void MoveLatterHalfTo(BPlusTreeLeafPage *recipient);
+  void MoveFirstToEndOf(BPlusTreeLeafPage *recipient);
+  void MoveLastToFrontOf(BPlusTreeLeafPage *recipient);
   auto GetMappingSize() -> size_t;
   auto GetArray() -> char *;
 

@@ -43,10 +43,13 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   auto ValueAt(int index) const -> ValueType;
   void SetValueAt(int index, const ValueType &value);
   auto SearchPage(const KeyType &key, KeyComparator &comparator) -> ValueType;
+  auto SearchJumpIdx(const KeyType &key, KeyComparator &comparator) -> int;
   auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
   auto FindKeyPosition(const KeyType &key, KeyComparator &comparator) -> int;
   auto RemoveKey(const KeyType &key, KeyComparator &comparator) -> bool;
   void MoveLatterHalfTo(BPlusTreeInternalPage *recipient);
+  void MoveFirstToEndOf(BPlusTreeInternalPage *recipient);
+  void MoveLastToFrontOf(BPlusTreeInternalPage *recipient);
   auto GetMappingSize() -> size_t;
   auto GetArray() -> char *;
 
