@@ -122,6 +122,46 @@ auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::Insert(const KeyT
 }
 
 /*
+ * Locate a key's index within this leaf page
+ * return -1 if not found
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::FindKeyPosition(const KeyType &key,
+                                                                               KeyComparator &comparator) -> int {
+  auto left = 1;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    auto mid = left + (right - left) / 2;
+    auto comp_res = comparator(key, KeyAt(mid));
+    if (comp_res == 0) {
+      return mid;
+    }
+    if (comp_res < 0) {
+      right = mid - 1;
+    } else {
+      left = mid + 1;
+    }
+  }
+  return -1;
+}
+
+/*
+ * Delete a pair with the specified key from this leaf page
+ * return false if such key doesn't exist, true if successful deletion
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::RemoveKey(const KeyType &key, KeyComparator &comparator)
+    -> bool {
+  auto to_delete_index = FindKeyPosition(key, comparator);
+  if (to_delete_index == -1) {
+    return false;
+  }
+  FillIndex(to_delete_index + 1); // shift left by 1 starting from to_delete_index + 1
+  DecreaseSize(1);
+  return true;
+}
+
+/*
  * The page full, move the latter half to a newly-created sibling page
  * and properly change both self and sibling page size
  */

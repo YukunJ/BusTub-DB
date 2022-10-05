@@ -53,6 +53,8 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   auto ValueAt(int index) const -> ValueType;
   void SetValueAt(int index, const ValueType &value);
   auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
+  auto FindKeyPosition(const KeyType &key, KeyComparator &comparator) -> int;
+  auto RemoveKey(const KeyType &key, KeyComparator &comparator) -> bool;
   void MoveLatterHalfTo(BPlusTreeLeafPage *recipient);
   auto GetMappingSize() -> size_t;
   auto GetArray() -> char *;

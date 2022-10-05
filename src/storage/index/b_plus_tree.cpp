@@ -15,7 +15,7 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
       buffer_pool_manager_(buffer_pool_manager),
       comparator_(comparator),
       leaf_max_size_(leaf_max_size),
-      internal_max_size_(internal_max_size) {}
+      internal_max_size_(internal_max_size) {std::cout << "Initialize B+ Tree with leaf_max_size=" << leaf_max_size << " and internal_max_size=" << internal_max_size << std::endl;}
 
 /*
  * Helper function to decide whether current b+tree is empty
@@ -105,7 +105,13 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
  * necessary.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {}
+void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
+  if (IsEmpty()) {
+    return;
+  }
+  auto leaf_page = FindLeafPage(key);
+  RemoveEntry(leaf_page, key);
+}
 
 /*****************************************************************************
  * INDEX ITERATOR
@@ -202,7 +208,8 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::InitBPlusTree(const KeyType &
   root_page_id_ = root_leaf_page->GetPageId();
   BUSTUB_ASSERT(root_leaf_page != nullptr, "root_leaf_page != nullptr");
   BUSTUB_ASSERT(root_page_id_ != INVALID_PAGE_ID, "root_page_id_ != INVALID_PAGE_ID");
-  UpdateRootPageId(root_page_id_);
+  UpdateRootPageId(!header_record_created_);
+  header_record_created_ = true;
   auto r = root_leaf_page->Insert(key, value, comparator_);
   BUSTUB_ASSERT(r, "BPlusTree Init Insert should be True");
   buffer_pool_manager_->UnpinPage(root_page_id_, true);  // modification made
@@ -244,7 +251,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
   if (left_page->IsRootPage()) {
     auto new_root_page = CreateInternalPage();
     root_page_id_ = new_root_page->GetPageId();
-    UpdateRootPageId(root_page_id_);
+    UpdateRootPageId(false);
     new_root_page->SetValueAt(0, left_page->GetPageId());
     new_root_page->SetKeyAt(1, upward_key);
     new_root_page->SetValueAt(1, right_page->GetPageId());
@@ -273,6 +280,63 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     buffer_pool_manager_->UnpinPage(parent_page_prime->GetPageId(), true);
   }
   buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), true);
+}
+
+/*
+ * Driver Helper function for Remove()
+ * to be called recursively with coalesce/merge sub-helper function
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *base_page, const KeyType &key) {
+  // auto is_leaf = base_page->IsLeafPage();
+  auto delete_success = RemoveDependingOnType(base_page, key);
+  if (!delete_success) {
+    // no modification made on this page
+    buffer_pool_manager_->UnpinPage(base_page->GetPageId(), false);
+    return;
+  }
+  if (base_page->GetSize() < base_page->GetMinSize()) {
+    if (base_page->IsRootPage()) {
+      // root page gets special treatment
+      // root's page being leaf page can violate the "half-full" property
+      if (base_page->IsInternalPage()) {
+        if (base_page->GetSize() == 1) {
+          // left with only 1 pointer, re-root the B+ tree
+          root_page_id_ = ReinterpretAsInternalPage(base_page)->ValueAt(0);
+          UpdateRootPageId(false);
+          auto new_root_page = FetchBPlusTreePage(root_page_id_);
+          new_root_page->SetParentPageId(INVALID_PAGE_ID); // help identify self as root
+          buffer_pool_manager_->UnpinPage(root_page_id_, true);
+        }
+      } else {
+        // root's page is leaf page, only if everything is deleted
+        if (base_page->GetSize() == 0) {
+          root_page_id_ = INVALID_PAGE_ID;
+          UpdateRootPageId(false);
+        }
+      }
+    } else {
+
+    }
+  }
+
+
+
+  // mark as dirty just because we remove an entry from the page
+  buffer_pool_manager_->UnpinPage(base_page->GetPageId(), true);
+}
+
+/*
+ * Distinguish between leaf and internal page
+ * and reinterpret + remove page + return bool flag to caller
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool {
+  auto is_leaf = base_page->IsLeafPage();
+  if (is_leaf) {
+    return ReinterpretAsLeafPage(base_page)->RemoveKey(key, comparator_);
+  }
+  return ReinterpretAsInternalPage(base_page)->RemoveKey(key, comparator_);
 }
 
 /*

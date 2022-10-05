@@ -103,6 +103,46 @@ auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::Insert(const KeyType 
 }
 
 /*
+ * Locate a key's index within this leaf page
+ * return -1 if not found
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::FindKeyPosition(const KeyType &key,
+                                                                           KeyComparator &comparator) -> int {
+  auto left = 0;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    auto mid = left + (right - left) / 2;
+    auto comp_res = comparator(key, KeyAt(mid));
+    if (comp_res == 0) {
+      return mid;
+    }
+    if (comp_res < 0) {
+      right = mid - 1;
+    } else {
+      left = mid + 1;
+    }
+  }
+  return -1;
+}
+
+/*
+ * Delete a pair with the specified key from this leaf page
+ * return false if such key doesn't exist, true if successful deletion
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>::RemoveKey(const KeyType &key, KeyComparator &comparator)
+    -> bool {
+  auto to_delete_index = FindKeyPosition(key, comparator);
+  if (to_delete_index == -1) {
+    return false;
+  }
+  FillIndex(to_delete_index + 1); // shift left by 1 starting from to_delete_index + 1
+  DecreaseSize(1);
+  return true;
+}
+
+/*
  * Shift all elements starting from index to right by 1 position
  * so that index end up with an empty hole for insert
  * but will not increase the size, it's up to the caller to do so

@@ -75,6 +75,7 @@ class BPlusTree {
   void RemoveFromFile(const std::string &file_name, Transaction *transaction = nullptr);
 
  private:
+
   auto CreateInternalPage() -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
 
   auto CreateLeafPage() -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
@@ -84,6 +85,10 @@ class BPlusTree {
   auto FindLeafPage(const KeyType &key) -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
 
   void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
+
+  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key);
+
+  auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType&key) -> bool;
 
   void UpdateRootPageId(int insert_record = 0);
 
@@ -105,6 +110,8 @@ class BPlusTree {
   KeyComparator comparator_;
   int leaf_max_size_;
   int internal_max_size_;
+  // only want to insert into header page about this index's existence once
+  bool header_record_created_{false};
 };
 
 }  // namespace bustub
