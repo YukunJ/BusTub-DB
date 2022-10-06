@@ -15,10 +15,7 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
       buffer_pool_manager_(buffer_pool_manager),
       comparator_(comparator),
       leaf_max_size_(leaf_max_size),
-      internal_max_size_(internal_max_size) {
-  std::cout << "Initialize B+ Tree with leaf_max_size=" << leaf_max_size
-            << " and internal_max_size=" << internal_max_size << std::endl;
-}
+      internal_max_size_(internal_max_size) {}
 
 /*
  * Helper function to decide whether current b+tree is empty
@@ -272,6 +269,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     // overflow in parent page, split parent page
     // parent page is definitely internal page, be careful of the 0-index invalid key
     auto parent_page_prime = CreateInternalPage();
+    parent_page_prime->SetParentPageId(parent_page->GetParentPageId());  // same parent by default
     parent_page->MoveLatterHalfTo(parent_page_prime);
     auto new_parent_page_id = parent_page_prime->GetPageId();
     for (auto i = 0; i < parent_page_prime->GetSize(); i++) {

@@ -10,8 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <algorithm>
+#include <algorithm>  // NOLINT
 #include <cstdio>
+#include <iterator>  // NOLINT
+#include <random>    // NOLINT
 
 #include "buffer/buffer_pool_manager_instance.h"
 #include "gtest/gtest.h"
@@ -19,8 +21,6 @@
 #include "test_util.h"  // NOLINT
 
 namespace bustub {
-
-TEST(BPlusTreeTests, DISABLED_ScaleRandomDeleteTest) {}
 
 TEST(BPlusTreeTests, DeleteTest1) {
   // create KeyComparator and index schema
