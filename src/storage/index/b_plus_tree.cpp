@@ -319,15 +319,16 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
       // 2. redistribute from left
       // 3. merge from right
       // 4. merge from left
-      auto redistribute_success = TryRedistribute(base_page, key);
+      auto redistribute_success = TryRedistribute(base_page, key); // try right and then left
       if (!redistribute_success) {
-        TryMerge(base_page, key);
+        TryMerge(base_page, key); // must succeed
       }
     }
   }
 
   // mark as dirty just because we remove an entry from the page
   if (should_unpin) {
+    // when in recursive call, might not need to unpin this page again
     buffer_pool_manager_->UnpinPage(base_page->GetPageId(), true);
   }
 }
