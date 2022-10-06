@@ -99,6 +99,11 @@ class BPlusTree {
 
   void Merge(BPlusTreePage *base, BPlusTreePage *sibling,
              BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index, bool sibling_on_left);
+
+  void RefreshParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page, int index);
+
+  void RefreshAllParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page);
+
   void UpdateRootPageId(int insert_record = 0);
 
   auto FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage *;

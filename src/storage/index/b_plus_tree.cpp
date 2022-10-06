@@ -271,14 +271,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     auto parent_page_prime = CreateInternalPage();
     parent_page_prime->SetParentPageId(parent_page->GetParentPageId());  // same parent by default
     parent_page->MoveLatterHalfTo(parent_page_prime);
-    auto new_parent_page_id = parent_page_prime->GetPageId();
-    for (auto i = 0; i < parent_page_prime->GetSize(); i++) {
-      // update moved children's parent id to their new parent
-      auto child_page_id = parent_page_prime->ValueAt(i);
-      auto child_page = FetchBPlusTreePage(child_page_id);
-      child_page->SetParentPageId(new_parent_page_id);
-      buffer_pool_manager_->UnpinPage(child_page_id, true);
-    }
+    RefreshAllParentPointer(parent_page_prime);
     const auto further_upward_key = parent_page_prime->KeyAt(0);  // actually invalid 0-indexed key
     InsertInParent(parent_page, parent_page_prime, further_upward_key);
     buffer_pool_manager_->UnpinPage(parent_page_prime->GetPageId(), true);
@@ -449,21 +442,14 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Redistribute(
     auto base_internal = ReinterpretAsInternalPage(base);
     auto sibling_internal = ReinterpretAsInternalPage(sibling);
     if (sibling_on_left) {
-      auto sibling_size = sibling_internal->GetSize();
-      // change the moved page's parent id
-      auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(sibling_size - 1));
-      moved_page->SetParentPageId(base_internal->GetPageId());
-      buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
       sibling_internal->MoveLastToFrontOf(base_internal);
+      RefreshParentPointer(base_internal, 0);
       auto upward_key = base_internal->KeyAt(0);
       parent->SetKeyAt(base_index, upward_key);
     } else {
       // sibling on the right
-      // change the moved page's parent id
-      auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(0));
-      moved_page->SetParentPageId(base_internal->GetPageId());
-      buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
       sibling_internal->MoveFirstToEndOf(base_internal);
+      RefreshParentPointer(base_internal, base_internal->GetSize() - 1);
       auto parent_key = parent->KeyAt(base_index + 1);
       auto upward_key = sibling_internal->KeyAt(0);
       base_internal->SetKeyAt(base_internal->GetSize() - 1, parent_key);
@@ -508,12 +494,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
     if (sibling_on_left) {
       auto key_in_between = parent->KeyAt(base_index);
       auto sibling_old_size = sibling_internal->GetSize();
-      for (auto i = 0; i < base_internal->GetSize(); i++) {
-        auto moved_page = FetchBPlusTreePage(base_internal->ValueAt(i));
-        moved_page->SetParentPageId(sibling_internal->GetPageId());
-        buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
-      }
       base_internal->MoveAllTo(sibling_internal);
+      RefreshAllParentPointer(sibling_internal);
       base_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
       sibling_internal->SetKeyAt(sibling_old_size, key_in_between);
       RemoveEntry(parent, key_in_between, false);
@@ -521,16 +503,39 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
       // sibling on the right
       auto key_in_between = parent->KeyAt(base_index + 1);
       auto base_old_size = base_internal->GetSize();
-      for (auto i = 0; i < sibling_internal->GetSize(); i++) {
-        auto moved_page = FetchBPlusTreePage(sibling_internal->ValueAt(i));
-        moved_page->SetParentPageId(base_internal->GetPageId());
-        buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
-      }
       sibling_internal->MoveAllTo(base_internal);
+      RefreshAllParentPointer(base_internal);
       sibling_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
       base_internal->SetKeyAt(base_old_size, key_in_between);
       RemoveEntry(parent, key_in_between, false);
     }
+  }
+}
+
+/*
+ * Refresh the index-th children's parent pointer to myself
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshParentPointer(
+    BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page, int index) {
+  auto page_id = page->GetPageId();
+  auto moved_page = FetchBPlusTreePage(page->ValueAt(index));
+  moved_page->SetParentPageId(page_id);
+  buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
+}
+
+/*
+ * When all children are received from other nodes
+ * re-map all children's parent pointer to myself
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshAllParentPointer(
+    BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page) {
+  auto page_id = page->GetPageId();
+  for (auto i = 0; i < page->GetSize(); i++) {
+    auto moved_page = FetchBPlusTreePage(page->ValueAt(i));
+    moved_page->SetParentPageId(page_id);
+    buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
   }
 }
 

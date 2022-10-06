@@ -47,7 +47,7 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
 
       std::unordered_set<int64_t> random_keys;
       for (int i = 0; i < key_generation; i++) {
-        random_keys.insert(rand_r() % INT64_MAX);  // NOLINT
+        random_keys.insert(rand() % INT64_MAX);  // NOLINT
       }
 
       for (auto key : random_keys) {
