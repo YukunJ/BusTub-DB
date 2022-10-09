@@ -11,11 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-
-#include <list>
+#include <iostream>
 #include <mutex>  // NOLINT
+#include <numeric>
 #include <unordered_map>
-
+#include <vector>
 #include "buffer/buffer_pool_manager.h"
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
@@ -23,7 +23,6 @@
 #include "recovery/log_manager.h"
 #include "storage/disk/disk_manager.h"
 #include "storage/page/page.h"
-
 namespace bustub {
 
 /**
@@ -145,7 +144,7 @@ class BufferPoolManagerInstance : public BufferPoolManager {
   /** The next page id to be allocated  */
   std::atomic<page_id_t> next_page_id_ = 0;
   /** Bucket size for the extendible hash table */
-  const size_t bucket_size_ = 4;
+  const size_t bucket_size_ = 5;
 
   /** Array of buffer pool pages. */
   Page *pages_;
@@ -158,7 +157,7 @@ class BufferPoolManagerInstance : public BufferPoolManager {
   /** Replacer to find unpinned pages for replacement. */
   LRUKReplacer *replacer_;
   /** List of free frames that don't have any pages on them. */
-  std::list<frame_id_t> free_list_;
+  std::vector<frame_id_t> free_list_;
   /** This latch protects shared data structures. We recommend updating this comment to describe what it protects. */
   std::mutex latch_;
 
@@ -176,6 +175,12 @@ class BufferPoolManagerInstance : public BufferPoolManager {
     // This is a no-nop right now without a more complex data structure to track deallocated pages
   }
 
-  // TODO(student): You may add additional private members and helper functions
+ private:
+  /**
+   * @brief Try to find a victim frame to be evicted out to make space
+   * @param[out] available_frame_id if find victim, output its id
+   * @return true if found victim, false otherwise
+   */
+  auto FindVictim(frame_id_t *available_frame_id) -> bool;
 };
 }  // namespace bustub

@@ -75,7 +75,42 @@ class BPlusTree {
   void RemoveFromFile(const std::string &file_name, Transaction *transaction = nullptr);
 
  private:
+  auto CreateInternalPage() -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
+
+  auto CreateLeafPage() -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
+
+  auto InitBPlusTree(const KeyType &key, const ValueType &value) -> void;
+
+  auto FindLeafPage(const KeyType &key) -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
+
+  void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
+
+  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key, bool should_unpin = true);
+
+  auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  auto TryRedistribute(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  void Redistribute(BPlusTreePage *base, BPlusTreePage *sibling,
+                    BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index,
+                    bool sibling_on_left);
+
+  auto TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool;
+
+  void Merge(BPlusTreePage *base, BPlusTreePage *sibling,
+             BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index, bool sibling_on_left);
+
+  void RefreshParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page, int index);
+
+  void RefreshAllParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page);
+
   void UpdateRootPageId(int insert_record = 0);
+
+  auto FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage *;
+
+  auto ReinterpretAsLeafPage(BPlusTreePage *page) -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
+
+  auto ReinterpretAsInternalPage(BPlusTreePage *page) -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
 
   /* Debug Routines for FREE!! */
   void ToGraph(BPlusTreePage *page, BufferPoolManager *bpm, std::ofstream &out) const;
@@ -89,6 +124,8 @@ class BPlusTree {
   KeyComparator comparator_;
   int leaf_max_size_;
   int internal_max_size_;
+  // only want to insert into header page about this index's existence once
+  bool header_record_created_{false};
 };
 
 }  // namespace bustub

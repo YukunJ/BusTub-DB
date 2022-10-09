@@ -41,8 +41,22 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   auto KeyAt(int index) const -> KeyType;
   void SetKeyAt(int index, const KeyType &key);
   auto ValueAt(int index) const -> ValueType;
+  void SetValueAt(int index, const ValueType &value);
+  auto SearchPage(const KeyType &key, KeyComparator &comparator) -> ValueType;
+  auto SearchJumpIdx(const KeyType &key, KeyComparator &comparator) -> int;
+  auto Insert(const KeyType &key, const ValueType &value, KeyComparator &comparator) -> bool;
+  auto FindKeyPosition(const KeyType &key, KeyComparator &comparator) -> int;
+  auto RemoveKey(const KeyType &key, KeyComparator &comparator) -> bool;
+  void MoveAllTo(BPlusTreeInternalPage *recipient);
+  void MoveLatterHalfTo(BPlusTreeInternalPage *recipient);
+  void MoveFirstToEndOf(BPlusTreeInternalPage *recipient);
+  void MoveLastToFrontOf(BPlusTreeInternalPage *recipient);
+  auto GetMappingSize() -> size_t;
+  auto GetArray() -> char *;
 
  private:
+  void ExcavateIndex(int index);
+  void FillIndex(int index);
   // Flexible array member for page data.
   MappingType array_[1];
 };
