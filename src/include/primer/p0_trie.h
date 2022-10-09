@@ -280,7 +280,7 @@ class Trie {
    *
    * If the key is an empty string, return false immediately.
    *
-   * If the key already exists, return false. Duplicated keys are not allowed and
+   * If key already exists, return false. Duplicated keys are not allowed and
    * you should never overwrite value of an existing key.
    *
    * When you reach the ending character of a key:

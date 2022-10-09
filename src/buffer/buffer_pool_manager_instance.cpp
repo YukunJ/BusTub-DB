@@ -105,7 +105,6 @@ auto BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) -> 
   }
   if (pages_[frame_id].GetPinCount() == 0) {
     // pin count already 0
-    // BUSTUB_ASSERT(false, "UnpinPgImp() Over Unpin, already = 0");
     return false;
   }
   if (--pages_[frame_id].pin_count_ == 0) {
