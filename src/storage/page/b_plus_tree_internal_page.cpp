@@ -185,16 +185,37 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveAllTo(BPlusTr
 }
 
 /*
- * The page full, move the latter half to a newly-created sibling page
- * and properly change both self and sibling page size
- * caller should change sibling page's new childrem's parent ID to be new sibling page
+ * Internal Page's split is different from that of leaf page
+ * We split internal page before an insertion if before insertion the interal page is full
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfTo(BPlusTreeInternalPage *recipient) {
-  BUSTUB_ASSERT(GetSize() == GetMaxSize(), "GetSize() == GetMaxSize()");
-  auto size_retain = GetMaxSize() / 2 + (GetMaxSize() % 2 != 0);  // round up
-  auto size_move = GetMaxSize() - size_retain;
-  std::copy(&array_[size_retain], &array_[GetSize()], recipient->array_);
+void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfWithOneExtraTo(
+    BPlusTreeInternalPage *recipient, KeyType extra_key, ValueType extra_value, KeyComparator &comparator) {
+  BUSTUB_ASSERT(GetSize() == GetMaxSize(), "MoveLatterHalfWithOneExtraTo(): Assert GetSize() == GetMaxSize()");
+  // cannot overflow the page by inserting into it directly then re-distribute
+  auto total_size = GetSize() + 1;
+  MappingType tmp_space[total_size];
+  std::copy(&array_[0], &array_[GetSize()], tmp_space);
+  int insert_position = GetSize();
+  auto left = 0;
+  auto right = GetSize() - 1;
+  while (left <= right) {
+    auto mid = left + (right - left) / 2;
+    if (comparator(extra_key, KeyAt(mid)) < 0) {
+      insert_position = mid;
+      right = mid - 1;
+    } else {
+      left = mid + 1;
+    }
+  }
+  // shift everything starting from insertion_position to right by 1 position
+  std::copy_backward(tmp_space + insert_position, tmp_space + GetSize(), tmp_space + GetSize() + 1);
+  tmp_space[insert_position].first = extra_key;
+  tmp_space[insert_position].second = extra_value;
+  auto size_retain = total_size / 2 + (total_size % 2 != 0);  // round up
+  auto size_move = total_size - size_retain;
+  std::copy(&tmp_space[0], &tmp_space[size_retain], array_);
+  std::copy(&tmp_space[size_retain], &tmp_space[total_size], recipient->array_);
   SetSize(size_retain);
   recipient->SetSize(size_move);
 }

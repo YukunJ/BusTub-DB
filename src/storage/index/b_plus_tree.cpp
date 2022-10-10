@@ -281,19 +281,21 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     buffer_pool_manager_->UnpinPage(root_page_id_, true);
     return;
   }
-  // upon entry, both left and right's parent point to this parent_page, may need change
+  // upon entry from Insert(), both left and right's parent point to this parent_page, may need change
   auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(left_page->GetParentPageId()));
-  parent_page->Insert(upward_key, right_page->GetPageId(), comparator_);
   if (parent_page->GetSize() == parent_page->GetMaxSize()) {
-    // overflow in parent page, split parent page
+    // follow rule that split internal node when number of values reaches max_size before insertion
     // parent page is definitely internal page, be careful of the 0-index invalid key
     auto parent_page_prime = CreateInternalPage();
     parent_page_prime->SetParentPageId(parent_page->GetParentPageId());  // same parent by default
-    parent_page->MoveLatterHalfTo(parent_page_prime);
+    parent_page->MoveLatterHalfWithOneExtraTo(parent_page_prime, upward_key, right_page->GetPageId(), comparator_);
     RefreshAllParentPointer(parent_page_prime);
     const auto further_upward_key = parent_page_prime->KeyAt(0);  // actually invalid 0-indexed key
     InsertInParent(parent_page, parent_page_prime, further_upward_key);
     buffer_pool_manager_->UnpinPage(parent_page_prime->GetPageId(), true);
+  } else {
+    // if not split, just insert into parent's page
+    parent_page->Insert(upward_key, right_page->GetPageId(), comparator_);
   }
   buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), true);
 }
@@ -340,7 +342,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
       // 4. merge from left
       auto redistribute_success = TryRedistribute(base_page, key);  // try right and then left
       if (!redistribute_success) {
-        TryMerge(base_page, key);  // must succeed
+        auto merge_success = TryMerge(base_page, key);  // must succeed
+        BUSTUB_ASSERT(redistribute_success || merge_success, "redistribute_success || merge_success");
       }
     }
   }
