@@ -19,6 +19,7 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
 
 /*
  * Helper function to decide whether current b+tree is empty
+ * should have latch on the root page id before accessing
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return root_page_id_ == INVALID_PAGE_ID; }
@@ -32,7 +33,9 @@ auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return root_page_id_ == INVALID_P
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) -> bool {
+  LatchRootPageId(transaction, LatchMode::READ);
   if (IsEmpty()) {
+    ReleaseAllLatches(transaction, LatchMode::READ);
     return false;
   }
   bool found = false;
@@ -55,6 +58,8 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
     }
   }
   buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
+  // clear up all the latches held in this transaction
+  ReleaseAllLatches(transaction, LatchMode::READ);
   return found;
 }
 
@@ -145,7 +150,8 @@ auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE {
     if (next_page_id == INVALID_PAGE_ID) {
       return End();  // no viable traversal
     }
-    leaf_page = ReinterpretAsLeafPage(FetchBPlusTreePage(next_page_id));
+    auto [raw_leaf_page, base_leaf_page] = FetchBPlusTreePage(next_page_id);
+    leaf_page = ReinterpretAsLeafPage(base_leaf_page);
     bigger_or_equal_idx = 0;
   }
   return INDEXITERATOR_TYPE(leaf_page->GetPageId(), bigger_or_equal_idx, leaf_page, buffer_pool_manager_);
@@ -160,6 +166,7 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE { return INDEXITERATOR_TYPE(); }
 
 /**
+ * need to grab root page id latch in concurrent mode
  * @return Page id of the root of this tree
  */
 INDEX_TEMPLATE_ARGUMENTS
@@ -247,13 +254,16 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &key)
     -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> * {
   BUSTUB_ASSERT(root_page_id_ != INVALID_PAGE_ID, "root_page_id_ != INVALID_PAGE_ID");
-  auto curr_page = FetchBPlusTreePage(root_page_id_);
+  auto [raw_curr_page, curr_page] = FetchBPlusTreePage(root_page_id_);
+  decltype(raw_curr_page) raw_next_page = nullptr;
   decltype(curr_page) next_page = nullptr;
   while (!curr_page->IsLeafPage()) {
     auto curr_page_internal = ReinterpretAsInternalPage(curr_page);
     page_id_t jump_pid = curr_page_internal->SearchPage(key, comparator_);
     BUSTUB_ASSERT(jump_pid != INVALID_PAGE_ID, "jump_pid != INVALID_PAGE_ID");
-    next_page = FetchBPlusTreePage(jump_pid);
+    auto next_pair = FetchBPlusTreePage(jump_pid);
+    raw_next_page = next_pair.first;
+    next_page = next_pair.second;
     buffer_pool_manager_->UnpinPage(curr_page->GetPageId(), false);
     curr_page = next_page;
   }
@@ -282,7 +292,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
     return;
   }
   // upon entry from Insert(), both left and right's parent point to this parent_page, may need change
-  auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(left_page->GetParentPageId()));
+  auto [raw_parent_page, base_parent_page] = FetchBPlusTreePage(left_page->GetParentPageId());
+  auto parent_page = ReinterpretAsInternalPage(base_parent_page);
   if (parent_page->GetSize() == parent_page->GetMaxSize()) {
     // follow rule that split internal node when number of values reaches max_size before insertion
     // parent page is definitely internal page, be careful of the 0-index invalid key
@@ -323,7 +334,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
           // left with only 1 pointer, re-root the B+ tree
           root_page_id_ = ReinterpretAsInternalPage(base_page)->ValueAt(0);
           UpdateRootPageId(false);
-          auto new_root_page = FetchBPlusTreePage(root_page_id_);
+          auto [raw_new_root_page, new_root_page] = FetchBPlusTreePage(root_page_id_);
           new_root_page->SetParentPageId(INVALID_PAGE_ID);  // help identify self as root
           buffer_pool_manager_->UnpinPage(root_page_id_, true);
         }
@@ -380,12 +391,13 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryRedistribute(BPlusTreePage
     -> bool {
   BUSTUB_ASSERT(!base_page->IsRootPage(), "!base_page->IsRootPage()");
   auto parent_page_id = base_page->GetParentPageId();
-  auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(parent_page_id));
+  auto [raw_parent_page, base_parent_page] = FetchBPlusTreePage(parent_page_id);
+  auto parent_page = ReinterpretAsInternalPage(base_parent_page);
   auto underfull_index = parent_page->SearchJumpIdx(key, comparator_);
   auto redistribute_success = false;
   if (underfull_index < parent_page->GetSize() - 1) {
     // has right sibling
-    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
+    auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
     if ((sibling_page->GetSize() - 1) >= sibling_page->GetMinSize()) {
       // stealing not leading to sibling underfull
       Redistribute(base_page, sibling_page, parent_page, underfull_index, false);
@@ -395,7 +407,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryRedistribute(BPlusTreePage
   }
   if (!redistribute_success && underfull_index > 0) {
     // has left sibling
-    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
+    auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
     if ((sibling_page->GetSize() - 1) >= sibling_page->GetMinSize()) {
       // stealing not leading to sibling underfull
       Redistribute(base_page, sibling_page, parent_page, underfull_index, true);
@@ -417,19 +429,20 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool {
   BUSTUB_ASSERT(!base_page->IsRootPage(), "!base_page->IsRootPage()");
   auto parent_page_id = base_page->GetParentPageId();
-  auto parent_page = ReinterpretAsInternalPage(FetchBPlusTreePage(parent_page_id));
+  auto [raw_parent_page, base_parent_page] = FetchBPlusTreePage(parent_page_id);
+  auto parent_page = ReinterpretAsInternalPage(base_parent_page);
   auto underfull_index = parent_page->SearchJumpIdx(key, comparator_);
   auto merge_success = false;
   if (underfull_index < parent_page->GetSize() - 1) {
     // has right sibling, definitely can merge in our logic flow
-    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
+    auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
     Merge(base_page, sibling_page, parent_page, underfull_index, false);
     merge_success = true;
     buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
   }
   if (!merge_success && underfull_index > 0) {
     // has left sibling, definitely can merge in our logic flow
-    auto sibling_page = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
+    auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
     Merge(base_page, sibling_page, parent_page, underfull_index, true);
     merge_success = true;
     buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
@@ -542,7 +555,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshParentPointer(
     BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page, int index) {
   auto page_id = page->GetPageId();
-  auto moved_page = FetchBPlusTreePage(page->ValueAt(index));
+  auto [raw_page, moved_page] = FetchBPlusTreePage(page->ValueAt(index));
   moved_page->SetParentPageId(page_id);
   buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
 }
@@ -556,10 +569,30 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshAllParentPointer(
     BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page) {
   auto page_id = page->GetPageId();
   for (auto i = 0; i < page->GetSize(); i++) {
-    auto moved_page = FetchBPlusTreePage(page->ValueAt(i));
+    auto [raw_page, moved_page] = FetchBPlusTreePage(page->ValueAt(i));
     moved_page->SetParentPageId(page_id);
     buffer_pool_manager_->UnpinPage(moved_page->GetPageId(), true);
   }
+}
+
+/*
+ * In concurrent mode, need to grab latch on the root id
+ * before fetching the root page
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::LatchRootPageId(Transaction *transaction,
+                                                                   BPlusTree::LatchMode mode) {
+  if (transaction == nullptr) {
+    // latch not required for this operation
+    return;
+  }
+  if (mode == LatchMode::READ) {
+    root_id_rwlatch_.RLock();
+  } else {
+    root_id_rwlatch_.WLock();
+  }
+  // nullptr as indicator for page id latch
+  transaction->AddIntoPageSet(nullptr);
 }
 
 /*
@@ -585,17 +618,20 @@ void BPLUSTREE_TYPE::UpdateRootPageId(int insert_record) {
 
 /**
  * Fetch a page using bufferPoolManager
- * and return it in the form of Base Class BPlusTreePage
+ * and return it in the form of <Raw Page, Base Class BPlusTreePage>
  * User could further reinterpret_cast the page based on page type
+ * Caller should assure to lock the page etc after getting the page *
  * @tparam KeyType
  * @tparam ValueType
  * @tparam KeyComparator
  * @param page_id the page id to be fetched from buffer pool manager
- * @return pointer to BPlusTreePage, to be further reinterpreted by caller function
+ * @return pointers to rawP Page and BPlusTreePage, to be further latched / reinterpreted by caller function
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTree<KeyType, ValueType, KeyComparator>::FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage * {
-  return reinterpret_cast<BPlusTreePage *>(buffer_pool_manager_->FetchPage(page_id)->GetData());
+auto BPlusTree<KeyType, ValueType, KeyComparator>::FetchBPlusTreePage(page_id_t page_id)
+    -> std::pair<Page *, BPlusTreePage *> {
+  Page *page = buffer_pool_manager_->FetchPage(page_id);
+  return {page, reinterpret_cast<BPlusTreePage *>(page->GetData())};
 }
 
 /** Cast a Base BPlusTree Page to LeafPage */
@@ -610,6 +646,38 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::ReinterpretAsInternalPage(BPlusTreePage *page)
     -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> * {
   return reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *>(page);
+}
+
+/** Release all the latches held in the transaction so far
+ *  nullptr is treated as root_id_rwlatch_
+ *  unlock according to the mode specified
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction *transaction,
+                                                                     BPlusTree::LatchMode mode) {
+  if (transaction == nullptr) {
+    // latch not required for this operation
+    return;
+  }
+  auto page_set = transaction->GetPageSet();
+  while (!page_set->empty()) {
+    // release from upstream to downstream
+    auto front_page = page_set->front();
+    if (mode == LatchMode::READ) {
+      if (front_page == nullptr) {
+        root_id_rwlatch_.RUnlock();
+      } else {
+        front_page->RUnlatch();
+      }
+    } else {
+      if (front_page == nullptr) {
+        root_id_rwlatch_.WUnlock();
+      } else {
+        front_page->WUnlatch();
+      }
+    }
+    page_set->pop_front();
+  }
 }
 
 /*

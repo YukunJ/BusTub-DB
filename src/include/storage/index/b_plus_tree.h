@@ -12,6 +12,7 @@
 
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "concurrency/transaction.h"
@@ -21,6 +22,23 @@
 
 namespace bustub {
 
+/** B+ Tree Concurrency Lock Crabbing Plan
+ * 1. Add another `RULatch` into B+ Tree class for the `root_page_id_` protection
+ * 2. Let the `FetchBPlusPage` function return a pair of `[B+ Tree Page, Raw Page]`, so that we could easily acquire
+lock and add the `Page *` into `transaction`.
++ Treat the `Page *` for `root_page_id_` as `nullptr` and add `nullptr` into `transaction` accordingly
+ * 3. Add a helper function `ReleaseAllLock(transaction *, enum Mode)` to release all the latches acquired in the
+`transaction`, where `mode` specifies whether to release `Rlatch` or `Wlatch`
+ * 4. At the beginning of the three header function `Find()`, `Insert()`, `Remove()`, acquire the latch on the
+`root_page_id_` first before fetching the root page
+ * 5. In the `FindLeafPage()` function, add `transaction *` and `mode` parameters. Currently either `Read` mode in which
+release parent `Rlatch` after acquiring children `Rlatch`. Another mode is `Write` mode in which we just acquire
+`Wlatch` from root page all the way to the leaf page we want, populate into the `transaction *`
+ * 6. In the `Insert` and `Remove` recursively helper, once deemed safe, release all the previous latches, or at the end
+of `split`, `coalesce` or `merge` operation, to release all the latches
+ * 7. Need to release latch on a page before calling BufferPoolManager to `Unpin` the page, otherwise this page might
+already get evicted out and the pointer `Page *` is invalid
+ */
 #define BPLUSTREE_TYPE BPlusTree<KeyType, ValueType, KeyComparator>
 
 /**
@@ -39,6 +57,9 @@ class BPlusTree {
   using LeafPage = BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>;
 
  public:
+  // control flag for latch crabbing
+  enum class LatchMode { READ, INSERT, DELETE };
+
   explicit BPlusTree(std::string name, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator,
                      int leaf_max_size = LEAF_PAGE_SIZE, int internal_max_size = INTERNAL_PAGE_SIZE);
 
@@ -104,13 +125,17 @@ class BPlusTree {
 
   void RefreshAllParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page);
 
+  void LatchRootPageId(Transaction *transaction, LatchMode mode);
+
   void UpdateRootPageId(int insert_record = 0);
 
-  auto FetchBPlusTreePage(page_id_t page_id) -> BPlusTreePage *;
+  auto FetchBPlusTreePage(page_id_t page_id) -> std::pair<Page *, BPlusTreePage *>;
 
   auto ReinterpretAsLeafPage(BPlusTreePage *page) -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
 
   auto ReinterpretAsInternalPage(BPlusTreePage *page) -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
+
+  void ReleaseAllLatches(Transaction *transaction, LatchMode mode);
 
   /* Debug Routines for FREE!! */
   void ToGraph(BPlusTreePage *page, BufferPoolManager *bpm, std::ofstream &out) const;
@@ -126,6 +151,8 @@ class BPlusTree {
   int internal_max_size_;
   // only want to insert into header page about this index's existence once
   bool header_record_created_{false};
+  // latch for the root_id
+  ReaderWriterLatch root_id_rwlatch_;
 };
 
 }  // namespace bustub
