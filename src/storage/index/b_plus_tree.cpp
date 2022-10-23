@@ -92,23 +92,42 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
     transaction = new Transaction(0);
     dummy_used = true;
   }
-  LatchRootPageId(transaction, LatchMode::INSERT);
+  bool success = InsertHelper(key, value, transaction, LatchMode::OPTIMIZE);
+  if (dummy_used) {
+    delete transaction;
+  }
+  return success;
+}
+
+/*
+ * Helper for insert
+ * transaction must be not null
+ * when OPTIMIZE mode fails, re-call with INSERT mode
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPlusTree<KeyType, ValueType, KeyComparator>::InsertHelper(const KeyType &key, const ValueType &value,
+                                                                Transaction *transaction, BPlusTree::LatchMode mode)
+    -> bool {
+  LatchRootPageId(transaction, mode);
   if (IsEmpty()) {
-    InitBPlusTree(key, value);
-    ReleaseAllLatches(transaction, LatchMode::INSERT);
-    if (dummy_used) {
-      delete transaction;
+    if (mode == LatchMode::OPTIMIZE) {
+      // OPTIMIZE mode fails
+      ReleaseAllLatches(transaction, mode);
+      return InsertHelper(key, value, transaction, LatchMode::INSERT);
     }
+    InitBPlusTree(key, value);
+    ReleaseAllLatches(transaction, mode);
     return true;
   }
-  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, LatchMode::INSERT);
-  BUSTUB_ASSERT(leaf_page->GetPageId() != INVALID_PAGE_ID, "leaf_page->GetPageId() != INVALID_PAGE_ID");
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, mode);
+  if ((1 + leaf_page->GetSize()) == leaf_page->GetMaxSize() && mode == LatchMode::OPTIMIZE) {
+    // OPTIMIZE mode fails
+    ReleaseAllLatches(transaction, mode);
+    return InsertHelper(key, value, transaction, LatchMode::INSERT);
+  }
   bool no_duplicate = leaf_page->Insert(key, value, comparator_);
   if (!no_duplicate) {
-    ReleaseAllLatches(transaction, LatchMode::INSERT);
-    if (dummy_used) {
-      delete transaction;
-    }
+    ReleaseAllLatches(transaction, mode);
     return false;
   }
   if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
@@ -120,10 +139,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
     InsertInParent(leaf_page, leaf_page_prime, key_upward);
     buffer_pool_manager_->UnpinPage(leaf_page_prime->GetPageId(), true);
   }
-  ReleaseAllLatches(transaction, LatchMode::INSERT);
-  if (dummy_used) {
-    delete transaction;
-  }
+  ReleaseAllLatches(transaction, mode);
   return true;
 }
 
@@ -145,20 +161,40 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
     transaction = new Transaction(0);
     dummy_used = true;
   }
-  LatchRootPageId(transaction, LatchMode::DELETE);
-  if (IsEmpty()) {
-    ReleaseAllLatches(transaction, LatchMode::DELETE);
-    if (dummy_used) {
-      delete transaction;
-    }
-    return;
-  }
-  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, LatchMode::DELETE);
-  RemoveEntry(leaf_page, key);
-  ReleaseAllLatches(transaction, LatchMode::DELETE);
+  RemoveHelper(key, transaction, LatchMode::OPTIMIZE);
   if (dummy_used) {
     delete transaction;
   }
+}
+
+/*
+ * Helper for Remove
+ * Start with OPTIMIZE mode
+ * if fails, retry with DELETE mode
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveHelper(const KeyType &key, Transaction *transaction,
+                                                                BPlusTree::LatchMode mode) {
+  LatchRootPageId(transaction, mode);
+  if (IsEmpty()) {
+    ReleaseAllLatches(transaction, mode);
+    return;
+  }
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, mode);
+  if ((leaf_page->GetSize() - 1) < leaf_page->GetMinSize() && mode == LatchMode::OPTIMIZE) {
+    auto is_root = leaf_page->IsRootPage();
+    auto is_leaf = leaf_page->IsLeafPage();
+    auto is_internal = leaf_page->IsInternalPage();
+    auto fail_condition1 = !is_root;
+    auto fail_condition2 = is_root && is_leaf && (leaf_page->GetSize() - 1) == 0;
+    auto fail_condition3 = is_root && is_internal && (leaf_page->GetSize() - 1) == 1;
+    if (fail_condition1 || fail_condition2 || fail_condition3) {
+      ReleaseAllLatches(transaction, mode);
+      return RemoveHelper(key, transaction, LatchMode::DELETE);
+    }
+  }
+  RemoveEntry(leaf_page, key);
+  ReleaseAllLatches(transaction, mode);
 }
 
 /*****************************************************************************
@@ -290,7 +326,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::InitBPlusTree(const KeyType &
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::IsSafePage(BPlusTreePage *page, BPlusTree::LatchMode mode) -> bool {
-  if (mode == LatchMode::READ) {
+  if (mode == LatchMode::READ || mode == LatchMode::OPTIMIZE) {
     return true;
   }
   if (mode == LatchMode::INSERT) {
@@ -343,8 +379,14 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
     // concurrency needed
     if (mode == LatchMode::READ) {
       raw_curr_page->RLatch();
+    } else if (mode == LatchMode::OPTIMIZE) {
+      if (curr_page->IsLeafPage()) {
+        raw_curr_page->WLatch();
+      } else {
+        raw_curr_page->RLatch();
+      }
     } else {
-      // INSERT or DELETE
+      // normal INSERT or DELETE
       raw_curr_page->WLatch();
     }
     if (IsSafePage(curr_page, mode)) {
@@ -363,8 +405,14 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
       // concurrency needed
       if (mode == LatchMode::READ) {
         raw_next_page->RLatch();
+      } else if (mode == LatchMode::OPTIMIZE) {
+        if (next_page->IsLeafPage()) {
+          raw_next_page->WLatch();
+        } else {
+          raw_next_page->RLatch();
+        }
       } else {
-        // INSERT or DELETE
+        // normal INSERT or DELETE
         raw_next_page->WLatch();
       }
       if (IsSafePage(next_page, mode)) {
@@ -691,10 +739,10 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshAllParentPointer(
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::LatchRootPageId(Transaction *transaction,
                                                                    BPlusTree::LatchMode mode) {
-  if (mode == LatchMode::READ) {
+  if (mode == LatchMode::READ || mode == LatchMode::OPTIMIZE) {
     root_id_rwlatch_.RLock();
   } else {
-    // Insert or Remove
+    // normal Insert or Remove
     root_id_rwlatch_.WLock();
   }
   // nullptr as indicator for page id latch
@@ -766,14 +814,27 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction
   while (!page_set->empty()) {
     // release from upstream to downstream
     auto front_page = page_set->front();
+    auto is_leaf =
+        (front_page != nullptr) ? reinterpret_cast<BPlusTreePage *>(front_page->GetData())->IsLeafPage() : false;
     if (mode == LatchMode::READ) {
       if (front_page == nullptr) {
         root_id_rwlatch_.RUnlock();
       } else {
         front_page->RUnlatch();
       }
+    } else if (mode == LatchMode::OPTIMIZE) {
+      if (front_page == nullptr) {
+        root_id_rwlatch_.RUnlock();
+      } else {
+        // in optimize mode, the last leaf page is held a Wlatch
+        if (is_leaf) {
+          front_page->WUnlatch();
+        } else {
+          front_page->RUnlatch();
+        }
+      }
     } else {
-      // write mode
+      // normal write mode
       if (front_page == nullptr) {
         root_id_rwlatch_.WUnlock();
       } else {
@@ -781,9 +842,11 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction
       }
     }
     if (front_page != nullptr) {
-      // TODO(yukunj): optimize to be page-oriented unpin dirty or clean
-      // currently all write lock is deemed 'dirty'
-      buffer_pool_manager_->UnpinPage(front_page->GetPageId(), mode != LatchMode::READ);
+      if (mode == LatchMode::OPTIMIZE) {
+        buffer_pool_manager_->UnpinPage(front_page->GetPageId(), is_leaf);
+      } else {
+        buffer_pool_manager_->UnpinPage(front_page->GetPageId(), mode != LatchMode::READ);
+      }
     }
     page_set->pop_front();
   }

@@ -58,7 +58,7 @@ class BPlusTree {
 
  public:
   // control flag for latch crabbing
-  enum class LatchMode { READ, INSERT, DELETE };
+  enum class LatchMode { READ, INSERT, DELETE, OPTIMIZE };
 
   explicit BPlusTree(std::string name, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator,
                      int leaf_max_size = LEAF_PAGE_SIZE, int internal_max_size = INTERNAL_PAGE_SIZE);
@@ -69,8 +69,14 @@ class BPlusTree {
   // Insert a key-value pair into this B+ tree.
   auto Insert(const KeyType &key, const ValueType &value, Transaction *transaction = nullptr) -> bool;
 
+  // Helper for Insert
+  auto InsertHelper(const KeyType &key, const ValueType &value, Transaction *transaction, LatchMode mode) -> bool;
+
   // Remove a key and its value from this B+ tree.
   void Remove(const KeyType &key, Transaction *transaction = nullptr);
+
+  // Helper for Remove
+  void RemoveHelper(const KeyType &key, Transaction *transaction, LatchMode mode);
 
   // return the value associated with a given key
   auto GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction = nullptr) -> bool;
