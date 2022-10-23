@@ -33,13 +33,22 @@ auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return root_page_id_ == INVALID_P
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) -> bool {
+  bool dummy_used = false;
+  if (transaction == nullptr) {
+    transaction = new Transaction(0);
+    dummy_used = true;
+  }
+
   LatchRootPageId(transaction, LatchMode::READ);
   if (IsEmpty()) {
     ReleaseAllLatches(transaction, LatchMode::READ);
+    if (dummy_used) {
+      delete transaction;
+    }
     return false;
   }
   bool found = false;
-  auto leaf_page = FindLeafPage(key);
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, LatchMode::READ);
   auto left = 0;
   auto right = leaf_page->GetSize() - 1;
   while (left <= right) {
@@ -57,9 +66,11 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
       left = mid + 1;
     }
   }
-  buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
   // clear up all the latches held in this transaction
   ReleaseAllLatches(transaction, LatchMode::READ);
+  if (dummy_used) {
+    delete transaction;
+  }
   return found;
 }
 
@@ -75,15 +86,28 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) -> bool {
+  bool dummy_used = false;
+  if (transaction == nullptr) {
+    transaction = new Transaction(0);
+    dummy_used = true;
+  }
+  LatchRootPageId(transaction, LatchMode::INSERT);
   if (IsEmpty()) {
     InitBPlusTree(key, value);
+    ReleaseAllLatches(transaction, LatchMode::INSERT);
+    if (dummy_used) {
+      delete transaction;
+    }
     return true;
   }
-  auto leaf_page = FindLeafPage(key);
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, LatchMode::INSERT);
   BUSTUB_ASSERT(leaf_page->GetPageId() != INVALID_PAGE_ID, "leaf_page->GetPageId() != INVALID_PAGE_ID");
   bool no_duplicate = leaf_page->Insert(key, value, comparator_);
   if (!no_duplicate) {
-    buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);  // no modification made
+    ReleaseAllLatches(transaction, LatchMode::INSERT);
+    if (dummy_used) {
+      delete transaction;
+    }
     return false;
   }
   if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
@@ -95,7 +119,10 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
     InsertInParent(leaf_page, leaf_page_prime, key_upward);
     buffer_pool_manager_->UnpinPage(leaf_page_prime->GetPageId(), true);
   }
-  buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), true);
+  ReleaseAllLatches(transaction, LatchMode::INSERT);
+  if (dummy_used) {
+    delete transaction;
+  }
   return true;
 }
 
@@ -114,7 +141,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
   if (IsEmpty()) {
     return;
   }
-  auto leaf_page = FindLeafPage(key);
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key);
   RemoveEntry(leaf_page, key);
 }
 
@@ -128,7 +155,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE {
-  auto leaf_page = FindLeafPage(KeyType());
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(KeyType());  // no concurrency support
   BUSTUB_ASSERT(leaf_page != nullptr, "leaf_page != nullptr");
   return INDEXITERATOR_TYPE(leaf_page->GetPageId(), 0, leaf_page, buffer_pool_manager_);
 }
@@ -140,7 +167,7 @@ auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE {
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE {
-  auto leaf_page = FindLeafPage(key);
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(key);  // no concurrency support
   auto bigger_or_equal_idx = leaf_page->FindGreaterEqualKeyPosition(key, comparator_);
   if (bigger_or_equal_idx == -1) {
     // no bigger or equal position in this leaf, need to move to next one
@@ -150,7 +177,7 @@ auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE {
     if (next_page_id == INVALID_PAGE_ID) {
       return End();  // no viable traversal
     }
-    auto [raw_leaf_page, base_leaf_page] = FetchBPlusTreePage(next_page_id);
+    auto base_leaf_page = FetchBPlusTreePage(next_page_id).second;
     leaf_page = ReinterpretAsLeafPage(base_leaf_page);
     bigger_or_equal_idx = 0;
   }
@@ -248,15 +275,38 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::InitBPlusTree(const KeyType &
  * @tparam ValueType
  * @tparam KeyComparator
  * @param key
+ * @param transaction
  * @return pointer to a leaf page if found, nullptr otherwise
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &key)
-    -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> * {
+auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &key, Transaction *transaction,
+                                                                LatchMode mode)
+    -> std::pair<Page *, BPlusTreeLeafPage<KeyType, RID, KeyComparator> *> {
   BUSTUB_ASSERT(root_page_id_ != INVALID_PAGE_ID, "root_page_id_ != INVALID_PAGE_ID");
+  if (transaction != nullptr) {
+    // root id latch should already be held in the transaction
+    BUSTUB_ASSERT(transaction->GetPageSet()->front() == nullptr, "transaction->GetPageSet()->front() == nullptr");
+  }
   auto [raw_curr_page, curr_page] = FetchBPlusTreePage(root_page_id_);
   decltype(raw_curr_page) raw_next_page = nullptr;
   decltype(curr_page) next_page = nullptr;
+  if (transaction != nullptr) {
+    // concurrency needed
+    if (mode == LatchMode::READ) {
+      raw_curr_page->RLatch();
+      ReleaseAllLatches(transaction, mode);
+    } else if (mode == LatchMode::INSERT) {
+      raw_curr_page->WLatch();
+      // this root page might already be leaf page
+      //      auto condition_1 = curr_page->IsLeafPage() && 1 + curr_page->GetSize() < curr_page->GetMaxSize();
+      //      auto condition_2 = curr_page->IsInternalPage() && 1 + curr_page->GetSize() <= curr_page->GetMaxSize();
+      //      if (condition_1 || condition_2) {
+      //        // safe, this node will not full to split
+      //        ReleaseAllLatches(transaction, mode);
+      //      }
+    }
+    transaction->AddIntoPageSet(raw_curr_page);
+  }
   while (!curr_page->IsLeafPage()) {
     auto curr_page_internal = ReinterpretAsInternalPage(curr_page);
     page_id_t jump_pid = curr_page_internal->SearchPage(key, comparator_);
@@ -264,11 +314,27 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
     auto next_pair = FetchBPlusTreePage(jump_pid);
     raw_next_page = next_pair.first;
     next_page = next_pair.second;
-    buffer_pool_manager_->UnpinPage(curr_page->GetPageId(), false);
+    if (transaction != nullptr) {
+      // concurrency needed
+      if (mode == LatchMode::READ) {
+        raw_next_page->RLatch();
+        ReleaseAllLatches(transaction, mode);
+      } else if (mode == LatchMode::INSERT) {
+        raw_next_page->WLatch();
+        //        if (1 + next_page->GetSize() <= next_page->GetMaxSize()) {
+        //          // safe, internal page will not full to split
+        //          ReleaseAllLatches(transaction, mode);
+        //        }
+      }
+      transaction->AddIntoPageSet(raw_next_page);
+    } else {
+      buffer_pool_manager_->UnpinPage(curr_page->GetPageId(), false);
+    }
+    raw_curr_page = raw_next_page;
     curr_page = next_page;
   }
   BUSTUB_ASSERT(curr_page->IsLeafPage(), "curr_page->IsLeafPage()");
-  return ReinterpretAsLeafPage(curr_page);
+  return {raw_curr_page, ReinterpretAsLeafPage(curr_page)};
 }
 
 /*
@@ -582,13 +648,10 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RefreshAllParentPointer(
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::LatchRootPageId(Transaction *transaction,
                                                                    BPlusTree::LatchMode mode) {
-  if (transaction == nullptr) {
-    // latch not required for this operation
-    return;
-  }
   if (mode == LatchMode::READ) {
     root_id_rwlatch_.RLock();
   } else {
+    // Insert or Remove
     root_id_rwlatch_.WLock();
   }
   // nullptr as indicator for page id latch
@@ -631,6 +694,7 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::FetchBPlusTreePage(page_id_t page_id)
     -> std::pair<Page *, BPlusTreePage *> {
   Page *page = buffer_pool_manager_->FetchPage(page_id);
+  BUSTUB_ASSERT(page != nullptr, "FetchBPlusTreePage(): page != nullptr");
   return {page, reinterpret_cast<BPlusTreePage *>(page->GetData())};
 }
 
@@ -655,10 +719,6 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::ReinterpretAsInternalPage(BPl
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction *transaction,
                                                                      BPlusTree::LatchMode mode) {
-  if (transaction == nullptr) {
-    // latch not required for this operation
-    return;
-  }
   auto page_set = transaction->GetPageSet();
   while (!page_set->empty()) {
     // release from upstream to downstream
@@ -670,11 +730,17 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction
         front_page->RUnlatch();
       }
     } else {
+      // write mode
       if (front_page == nullptr) {
         root_id_rwlatch_.WUnlock();
       } else {
         front_page->WUnlatch();
       }
+    }
+    if (front_page != nullptr) {
+      // TODO(yukunj): optimize to be page-oriented unpin dirty or clean
+      // current all write lock is deemed 'dirty'
+      buffer_pool_manager_->UnpinPage(front_page->GetPageId(), mode != LatchMode::READ);
     }
     page_set->pop_front();
   }

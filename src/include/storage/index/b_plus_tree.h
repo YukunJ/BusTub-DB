@@ -102,7 +102,8 @@ class BPlusTree {
 
   auto InitBPlusTree(const KeyType &key, const ValueType &value) -> void;
 
-  auto FindLeafPage(const KeyType &key) -> BPlusTreeLeafPage<KeyType, RID, KeyComparator> *;
+  auto FindLeafPage(const KeyType &key, Transaction *transaction = nullptr, LatchMode mode = LatchMode::READ)
+      -> std::pair<Page *, BPlusTreeLeafPage<KeyType, RID, KeyComparator> *>;
 
   void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
 
