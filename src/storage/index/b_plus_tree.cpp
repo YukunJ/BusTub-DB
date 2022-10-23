@@ -297,13 +297,10 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
       ReleaseAllLatches(transaction, mode);
     } else if (mode == LatchMode::INSERT) {
       raw_curr_page->WLatch();
-      // this root page might already be leaf page
-      //      auto condition_1 = curr_page->IsLeafPage() && 1 + curr_page->GetSize() < curr_page->GetMaxSize();
-      //      auto condition_2 = curr_page->IsInternalPage() && 1 + curr_page->GetSize() <= curr_page->GetMaxSize();
-      //      if (condition_1 || condition_2) {
-      //        // safe, this node will not full to split
-      //        ReleaseAllLatches(transaction, mode);
-      //      }
+      if (1 + curr_page->GetSize() < curr_page->GetMaxSize()) {
+        // safe, this node will not full to split
+        ReleaseAllLatches(transaction, mode);
+      }
     }
     transaction->AddIntoPageSet(raw_curr_page);
   }
@@ -321,10 +318,10 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
         ReleaseAllLatches(transaction, mode);
       } else if (mode == LatchMode::INSERT) {
         raw_next_page->WLatch();
-        //        if (1 + next_page->GetSize() <= next_page->GetMaxSize()) {
-        //          // safe, internal page will not full to split
-        //          ReleaseAllLatches(transaction, mode);
-        //        }
+        if (1 + next_page->GetSize() < next_page->GetMaxSize()) {
+          // safe, internal page will not full to split
+          ReleaseAllLatches(transaction, mode);
+        }
       }
       transaction->AddIntoPageSet(raw_next_page);
     } else {
