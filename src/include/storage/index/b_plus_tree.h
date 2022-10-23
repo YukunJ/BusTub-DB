@@ -102,12 +102,14 @@ class BPlusTree {
 
   auto InitBPlusTree(const KeyType &key, const ValueType &value) -> void;
 
+  auto IsSafePage(BPlusTreePage *page, LatchMode mode) -> bool;
+
   auto FindLeafPage(const KeyType &key, Transaction *transaction = nullptr, LatchMode mode = LatchMode::READ)
       -> std::pair<Page *, BPlusTreeLeafPage<KeyType, RID, KeyComparator> *>;
 
   void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
 
-  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key, bool should_unpin = true);
+  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key);
 
   auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool;
 
