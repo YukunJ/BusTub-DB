@@ -108,28 +108,31 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPlusTree<KeyType, ValueType, KeyComparator>::InsertHelper(const KeyType &key, const ValueType &value,
                                                                 Transaction *transaction, BPlusTree::LatchMode mode)
     -> bool {
+  int dirty_height = 0;
   LatchRootPageId(transaction, mode);
   if (IsEmpty()) {
     if (mode == LatchMode::OPTIMIZE) {
       // OPTIMIZE mode fails
-      ReleaseAllLatches(transaction, mode);
+      ReleaseAllLatches(transaction, mode, dirty_height);  // no page is dirty
       return InsertHelper(key, value, transaction, LatchMode::INSERT);
     }
     InitBPlusTree(key, value);
-    ReleaseAllLatches(transaction, mode);
+    ReleaseAllLatches(transaction, mode, dirty_height);
     return true;
   }
   auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, mode);
   if ((1 + leaf_page->GetSize()) == leaf_page->GetMaxSize() && mode == LatchMode::OPTIMIZE) {
     // OPTIMIZE mode fails
-    ReleaseAllLatches(transaction, mode);
+    ReleaseAllLatches(transaction, mode, dirty_height);
     return InsertHelper(key, value, transaction, LatchMode::INSERT);
   }
   bool no_duplicate = leaf_page->Insert(key, value, comparator_);
   if (!no_duplicate) {
-    ReleaseAllLatches(transaction, mode);
+    ReleaseAllLatches(transaction, mode, dirty_height);
     return false;
   }
+  dirty_height += 1;
+  // SetPageDirty(leaf_page->GetPageId());
   if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
     // overflow, need split
     auto leaf_page_prime = CreateLeafPage();
@@ -139,7 +142,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::InsertHelper(const KeyType &k
     InsertInParent(leaf_page, leaf_page_prime, key_upward);
     buffer_pool_manager_->UnpinPage(leaf_page_prime->GetPageId(), true);
   }
-  ReleaseAllLatches(transaction, mode);
+  ReleaseAllLatches(transaction, mode, dirty_height);
   return true;
 }
 
@@ -175,9 +178,10 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveHelper(const KeyType &key, Transaction *transaction,
                                                                 BPlusTree::LatchMode mode) {
+  int dirty_height = 0;
   LatchRootPageId(transaction, mode);
   if (IsEmpty()) {
-    ReleaseAllLatches(transaction, mode);
+    ReleaseAllLatches(transaction, mode, dirty_height);
     return;
   }
   auto [raw_leaf_page, leaf_page] = FindLeafPage(key, transaction, mode);
@@ -193,8 +197,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveHelper(const KeyType &k
       return RemoveHelper(key, transaction, LatchMode::DELETE);
     }
   }
-  RemoveEntry(leaf_page, key);
-  ReleaseAllLatches(transaction, mode);
+  RemoveEntry(leaf_page, key, dirty_height);
+  ReleaseAllLatches(transaction, mode, dirty_height);
 }
 
 /*****************************************************************************
@@ -430,6 +434,15 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::FindLeafPage(const KeyType &k
 }
 
 /*
+ * Awkward SetDirty() utility
+ */
+INDEX_TEMPLATE_ARGUMENTS
+void BPlusTree<KeyType, ValueType, KeyComparator>::SetPageDirty(page_id_t page_id) {
+  buffer_pool_manager_->FetchPage(page_id);
+  buffer_pool_manager_->UnpinPage(page_id, true);
+}
+
+/*
  * Recursively Insert Into the parent node
  */
 INDEX_TEMPLATE_ARGUMENTS
@@ -474,12 +487,15 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::InsertInParent(BPlusTreePage 
  * to be called recursively with coalesce/merge sub-helper function
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *base_page, const KeyType &key) {
+void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *base_page, const KeyType &key,
+                                                               int &dirty_height) {
   auto delete_success = RemoveDependingOnType(base_page, key);
   if (!delete_success) {
     // no modification made on this page
     return;
   }
+  dirty_height++;
+  // SetPageDirty(base_page->GetPageId());
   if (base_page->GetSize() < base_page->GetMinSize()) {
     if (base_page->IsRootPage()) {
       // root page gets special treatment
@@ -508,7 +524,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveEntry(BPlusTreePage *ba
       // 4. merge from left
       auto redistribute_success = TryRedistribute(base_page, key);  // try right and then left
       if (!redistribute_success) {
-        auto merge_success = TryMerge(base_page, key);  // must succeed
+        auto merge_success = TryMerge(base_page, key, dirty_height);  // must succeed
         BUSTUB_ASSERT(redistribute_success || merge_success, "redistribute_success || merge_success");
       }
     }
@@ -579,7 +595,8 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryRedistribute(BPlusTreePage
  * but will not unpin the base page, which will be done in Remove() main procedure's end
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool {
+auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_page, const KeyType &key,
+                                                            int &dirty_height) -> bool {
   BUSTUB_ASSERT(!base_page->IsRootPage(), "!base_page->IsRootPage()");
   auto parent_page_id = base_page->GetParentPageId();
   auto [raw_parent_page, base_parent_page] = FetchBPlusTreePage(parent_page_id);
@@ -590,7 +607,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_
     // has right sibling, definitely can merge in our logic flow
     auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index + 1));
     sibling_raw_page->WLatch();  // lock sibling
-    Merge(base_page, sibling_page, parent_page, underfull_index, false);
+    Merge(base_page, sibling_page, parent_page, underfull_index, false, dirty_height);
     sibling_raw_page->WUnlatch();
     merge_success = true;
     buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
@@ -599,7 +616,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::TryMerge(BPlusTreePage *base_
     // has left sibling, definitely can merge in our logic flow
     auto [sibling_raw_page, sibling_page] = FetchBPlusTreePage(parent_page->ValueAt(underfull_index - 1));
     sibling_raw_page->WLatch();  // lock sibling
-    Merge(base_page, sibling_page, parent_page, underfull_index, true);
+    Merge(base_page, sibling_page, parent_page, underfull_index, true, dirty_height);
     sibling_raw_page->WUnlatch();
     merge_success = true;
     buffer_pool_manager_->UnpinPage(sibling_page->GetPageId(), merge_success);
@@ -662,7 +679,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Redistribute(
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
     BPlusTreePage *base, BPlusTreePage *sibling, BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent,
-    int base_index, bool sibling_on_left) {
+    int base_index, bool sibling_on_left, int &dirty_height) {
   // also merge into left page, so that left's left page points to the correct next_page_id
   if (base->IsLeafPage()) {
     auto base_leaf = ReinterpretAsLeafPage(base);
@@ -672,14 +689,14 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
       base_leaf->MoveAllTo(sibling_leaf);
       sibling_leaf->SetNextPageId(base_leaf->GetNextPageId());
       base_leaf->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
-      RemoveEntry(parent, key_in_between);
+      RemoveEntry(parent, key_in_between, dirty_height);
     } else {
       // sibling on the right
       auto key_in_between = parent->KeyAt(base_index + 1);
       sibling_leaf->MoveAllTo(base_leaf);
       base_leaf->SetNextPageId(sibling_leaf->GetNextPageId());
       sibling_leaf->SetParentPageId(INVALID_PAGE_ID);
-      RemoveEntry(parent, key_in_between);
+      RemoveEntry(parent, key_in_between, dirty_height);
     }
   } else {
     auto base_internal = ReinterpretAsInternalPage(base);
@@ -691,7 +708,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
       RefreshAllParentPointer(sibling_internal);
       base_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
       sibling_internal->SetKeyAt(sibling_old_size, key_in_between);
-      RemoveEntry(parent, key_in_between);
+      RemoveEntry(parent, key_in_between, dirty_height);
     } else {
       // sibling on the right
       auto key_in_between = parent->KeyAt(base_index + 1);
@@ -700,7 +717,7 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::Merge(
       RefreshAllParentPointer(base_internal);
       sibling_internal->SetParentPageId(INVALID_PAGE_ID);  // mask off the link
       base_internal->SetKeyAt(base_old_size, key_in_between);
-      RemoveEntry(parent, key_in_between);
+      RemoveEntry(parent, key_in_between, dirty_height);
     }
   }
 }
@@ -809,7 +826,7 @@ auto BPlusTree<KeyType, ValueType, KeyComparator>::ReinterpretAsInternalPage(BPl
  */
 INDEX_TEMPLATE_ARGUMENTS
 void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction *transaction,
-                                                                     BPlusTree::LatchMode mode) {
+                                                                     BPlusTree::LatchMode mode, int dirty_height) {
   auto page_set = transaction->GetPageSet();
   while (!page_set->empty()) {
     // release from upstream to downstream
@@ -842,11 +859,8 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::ReleaseAllLatches(Transaction
       }
     }
     if (front_page != nullptr) {
-      if (mode == LatchMode::OPTIMIZE) {
-        buffer_pool_manager_->UnpinPage(front_page->GetPageId(), is_leaf);
-      } else {
-        buffer_pool_manager_->UnpinPage(front_page->GetPageId(), mode != LatchMode::READ);
-      }
+      // the last 'dirty_height' pages should be marked as dirty
+      buffer_pool_manager_->UnpinPage(front_page->GetPageId(), page_set->size() <= static_cast<size_t>(dirty_height));
     }
     page_set->pop_front();
   }

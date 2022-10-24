@@ -113,9 +113,11 @@ class BPlusTree {
   auto FindLeafPage(const KeyType &key, Transaction *transaction = nullptr, LatchMode mode = LatchMode::READ)
       -> std::pair<Page *, BPlusTreeLeafPage<KeyType, RID, KeyComparator> *>;
 
+  void SetPageDirty(page_id_t page_id);
+
   void InsertInParent(BPlusTreePage *left_page, BPlusTreePage *right_page, const KeyType &upward_key);
 
-  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key);
+  void RemoveEntry(BPlusTreePage *base_page, const KeyType &key, int &dirty_height);
 
   auto RemoveDependingOnType(BPlusTreePage *base_page, const KeyType &key) -> bool;
 
@@ -125,10 +127,11 @@ class BPlusTree {
                     BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index,
                     bool sibling_on_left);
 
-  auto TryMerge(BPlusTreePage *base_page, const KeyType &key) -> bool;
+  auto TryMerge(BPlusTreePage *base_page, const KeyType &key, int &dirty_height) -> bool;
 
   void Merge(BPlusTreePage *base, BPlusTreePage *sibling,
-             BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index, bool sibling_on_left);
+             BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *parent, int base_index, bool sibling_on_left,
+             int &dirty_height);
 
   void RefreshParentPointer(BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *page, int index);
 
@@ -144,7 +147,7 @@ class BPlusTree {
 
   auto ReinterpretAsInternalPage(BPlusTreePage *page) -> BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *;
 
-  void ReleaseAllLatches(Transaction *transaction, LatchMode mode);
+  void ReleaseAllLatches(Transaction *transaction, LatchMode mode, int dirty_height = 0);
 
   /* Debug Routines for FREE!! */
   void ToGraph(BPlusTreePage *page, BufferPoolManager *bpm, std::ofstream &out) const;
