@@ -193,29 +193,36 @@ void BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>::MoveLatterHalfWit
     BPlusTreeInternalPage *recipient, KeyType extra_key, ValueType extra_value, KeyComparator &comparator) {
   BUSTUB_ASSERT(GetSize() == GetMaxSize(), "MoveLatterHalfWithOneExtraTo(): Assert GetSize() == GetMaxSize()");
   // cannot overflow the page by inserting into it directly then re-distribute
+  //  auto total_size = GetSize() + 1;
+  //  MappingType tmp_space[total_size];
+  //  std::copy(&array_[0], &array_[GetSize()], tmp_space);
+  //  int insert_position = GetSize();
+  //  auto left = 0;
+  //  auto right = GetSize() - 1;
+  //  while (left <= right) {
+  //    auto mid = left + (right - left) / 2;
+  //    if (comparator(extra_key, KeyAt(mid)) < 0) {
+  //      insert_position = mid;
+  //      right = mid - 1;
+  //    } else {
+  //      left = mid + 1;
+  //    }
+  //  }
+  //  // shift everything starting from insertion_position to right by 1 position
+  //  std::copy_backward(tmp_space + insert_position, tmp_space + GetSize(), tmp_space + GetSize() + 1);
+  //  tmp_space[insert_position].first = extra_key;
+  //  tmp_space[insert_position].second = extra_value;
+  //  auto size_retain = total_size / 2 + (total_size % 2 != 0);  // round up
+  //  auto size_move = total_size - size_retain;
+  //  std::copy(&tmp_space[0], &tmp_space[size_retain], array_);
+  //  std::copy(&tmp_space[size_retain], &tmp_space[total_size], recipient->array_);
+  //  SetSize(size_retain);
+  //  recipient->SetSize(size_move);
   auto total_size = GetSize() + 1;
-  MappingType tmp_space[total_size];
-  std::copy(&array_[0], &array_[GetSize()], tmp_space);
-  int insert_position = GetSize();
-  auto left = 0;
-  auto right = GetSize() - 1;
-  while (left <= right) {
-    auto mid = left + (right - left) / 2;
-    if (comparator(extra_key, KeyAt(mid)) < 0) {
-      insert_position = mid;
-      right = mid - 1;
-    } else {
-      left = mid + 1;
-    }
-  }
-  // shift everything starting from insertion_position to right by 1 position
-  std::copy_backward(tmp_space + insert_position, tmp_space + GetSize(), tmp_space + GetSize() + 1);
-  tmp_space[insert_position].first = extra_key;
-  tmp_space[insert_position].second = extra_value;
+  Insert(extra_key, extra_value, comparator);
   auto size_retain = total_size / 2 + (total_size % 2 != 0);  // round up
   auto size_move = total_size - size_retain;
-  std::copy(&tmp_space[0], &tmp_space[size_retain], array_);
-  std::copy(&tmp_space[size_retain], &tmp_space[total_size], recipient->array_);
+  std::copy(&array_[size_retain], &array_[total_size], recipient->array_);
   SetSize(size_retain);
   recipient->SetSize(size_move);
 }
