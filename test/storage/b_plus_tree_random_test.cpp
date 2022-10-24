@@ -32,13 +32,11 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
       GenericComparator<8> comparator(key_schema.get());
 
       auto *disk_manager = new DiskManager("test.db");
-      BufferPoolManager *bpm = new BufferPoolManagerInstance(100, disk_manager);
+      BufferPoolManager *bpm = new BufferPoolManagerInstance(200, disk_manager);
       // create b+ tree
       BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", bpm, comparator, 5, 5);
       GenericKey<8> index_key;
       RID rid;
-      // create transaction
-      auto *transaction = new Transaction(0);
 
       // create and fetch header_page
       page_id_t page_id;
@@ -51,17 +49,21 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
       }
 
       for (auto key : random_keys) {
+        auto *transaction_ = new Transaction(0);
         int64_t value = key & 0xFFFFFFFF;
         rid.Set(static_cast<int32_t>(key >> 32), value);
         index_key.SetFromInteger(key);
-        tree.Insert(index_key, rid, transaction);
+        tree.Insert(index_key, rid, nullptr);
+        delete transaction_;
       }
 
       std::vector<RID> rids;
       for (auto key : random_keys) {
+        auto *transaction_ = new Transaction(0);
         rids.clear();
         index_key.SetFromInteger(key);
-        tree.GetValue(index_key, &rids);
+        tree.GetValue(index_key, &rids, nullptr);
+        delete transaction_;
         EXPECT_EQ(rids.size(), 1);
 
         int64_t value = key & 0xFFFFFFFF;
@@ -75,16 +77,17 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
                   std::mt19937{seed});  // NOLINT
       for (auto i : remove_keys) {
         index_key.SetFromInteger(i);
-        tree.Remove(index_key, transaction);
+        tree.Remove(index_key, nullptr);
       }
 
       int64_t size = 0;
       bool is_present;
 
       for (auto key : random_keys) {
+        auto *transaction_ = new Transaction(0);
         rids.clear();
         index_key.SetFromInteger(key);
-        is_present = tree.GetValue(index_key, &rids);
+        is_present = tree.GetValue(index_key, &rids, nullptr);
 
         if (!is_present) {
           EXPECT_NE(std::find(remove_keys.begin(), remove_keys.end(), key), remove_keys.end());
@@ -94,6 +97,7 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
           EXPECT_EQ(rids[0].GetSlotNum(), key);
           size = size + 1;
         }
+        delete transaction_;
       }
 
       EXPECT_EQ(size, random_keys.size() - remove_keys.size());
@@ -105,7 +109,6 @@ TEST(BPlusTreeTests, ScaleRandomTest) {
                 << std::endl;
       std::cout << "=====================================================" << std::endl;
       bpm->UnpinPage(HEADER_PAGE_ID, true);
-      delete transaction;
       delete disk_manager;
       delete bpm;
       remove("test.db");
