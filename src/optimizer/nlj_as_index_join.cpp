@@ -81,6 +81,30 @@ auto Optimizer::OptimizeNLJAsIndexJoin(const AbstractPlanNodeRef &plan) -> Abstr
                 }
               }
             }
+
+            // Or Ensure left child is table scan
+//            if (nlj_plan.GetLeftPlan()->GetType() == PlanType::SeqScan) {
+//              const auto &left_seq_scan = dynamic_cast<const SeqScanPlanNode &>(*nlj_plan.GetLeftPlan());
+//              if (left_expr->GetTupleIdx() == 0 && right_expr->GetTupleIdx() == 1) {
+//                if (auto index = MatchIndex(left_seq_scan.table_name_, left_expr->GetColIdx()); index != std::nullopt) {
+//                  auto [index_oid, index_name] = *index;
+//                  return std::make_shared<NestedIndexJoinPlanNode>(
+//                      nlj_plan.output_schema_, nlj_plan.GetLeftPlan(), std::move(right_expr_tuple_0),
+//                      left_seq_scan.GetTableOid(), index_oid, std::move(index_name), left_seq_scan.table_name_,
+//                      left_seq_scan.output_schema_, nlj_plan.GetJoinType());
+//                }
+//              }
+//              if (left_expr->GetTupleIdx() == 1 && right_expr->GetTupleIdx() == 0) {
+//                if (auto index = MatchIndex(left_seq_scan.table_name_, right_expr->GetColIdx());
+//                    index != std::nullopt) {
+//                  auto [index_oid, index_name] = *index;
+//                  return std::make_shared<NestedIndexJoinPlanNode>(
+//                      nlj_plan.output_schema_, nlj_plan.GetLeftPlan(), std::move(left_expr_tuple_0),
+//                      left_seq_scan.GetTableOid(), index_oid, std::move(index_name), left_seq_scan.table_name_,
+//                      left_seq_scan.output_schema_, nlj_plan.GetJoinType());
+//                }
+//              }
+//            }
           }
         }
       }
