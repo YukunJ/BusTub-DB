@@ -66,6 +66,8 @@ class SimpleAggregationHashTable {
   auto Size() const -> size_t { return ht_.size(); }
 
   /**
+   * TODO(Student)
+   *
    * Combines the input into the aggregation result.
    * @param[out] result The output aggregate value
    * @param input The input value
