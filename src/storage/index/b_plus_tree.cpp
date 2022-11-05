@@ -211,7 +211,11 @@ void BPlusTree<KeyType, ValueType, KeyComparator>::RemoveHelper(const KeyType &k
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE {
-  auto [raw_leaf_page, leaf_page] = FindLeafPage(KeyType());  // no concurrency support
+  // no concurrency support
+  if (IsEmpty()) {
+    return End();
+  }
+  auto [raw_leaf_page, leaf_page] = FindLeafPage(KeyType());
   BUSTUB_ASSERT(leaf_page != nullptr, "leaf_page != nullptr");
   return INDEXITERATOR_TYPE(leaf_page->GetPageId(), 0, leaf_page, buffer_pool_manager_);
 }

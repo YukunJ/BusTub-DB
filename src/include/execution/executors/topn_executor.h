@@ -13,6 +13,7 @@
 #pragma once
 
 #include <memory>
+#include <queue>
 #include <vector>
 
 #include "execution/executor_context.h"
@@ -52,5 +53,9 @@ class TopNExecutor : public AbstractExecutor {
  private:
   /** The topn plan node to be executed */
   const TopNPlanNode *plan_;
+  /** The child executor from which to fetch join tuple */
+  std::unique_ptr<AbstractExecutor> child_executor_;
+  /** Sorted storage */
+  std::vector<Tuple> sorted_;
 };
 }  // namespace bustub
