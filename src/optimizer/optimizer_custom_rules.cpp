@@ -1,7 +1,11 @@
 #include "common/util/string_util.h"
 #include "execution/expressions/column_value_expression.h"
 #include "execution/expressions/comparison_expression.h"
+#include "execution/expressions/constant_value_expression.h"
+#include "execution/expressions/logic_expression.h"
 #include "execution/plans/abstract_plan.h"
+#include "execution/plans/filter_plan.h"
+#include "execution/plans/hash_join_plan.h"
 #include "execution/plans/mock_scan_plan.h"
 #include "execution/plans/nested_loop_join_plan.h"
 #include "execution/plans/seq_scan_plan.h"
@@ -41,7 +45,7 @@ auto EstimatedCardinality(const std::string &table_name) -> size_t {
   return NO_CARDINALITY;  // no supposed to hit this branch
 }
 
-/*
+/**
  * @brief: fetch the cardinality of a table
  */
 auto FetchCardinality(const AbstractPlanNodeRef &plan) -> size_t {
@@ -53,6 +57,142 @@ auto FetchCardinality(const AbstractPlanNodeRef &plan) -> size_t {
   }
   const auto &seq_scan_plan = dynamic_cast<const SeqScanPlanNode &>(*plan);
   return EstimatedCardinality(seq_scan_plan.table_name_);
+}
+
+/**
+ * @brief: Create a new column expression with only column index shift left
+ */
+auto ShiftColumnExpression(const ColumnValueExpression &col_expr, uint32_t shift_left_count) -> AbstractExpressionRef {
+  auto tuple_idx = col_expr.GetTupleIdx();
+  auto col_idx = col_expr.GetColIdx() - shift_left_count;
+  auto ret_type = col_expr.GetReturnType();
+  const auto new_col_expr = std::make_shared<ColumnValueExpression>(tuple_idx, col_idx, ret_type);
+  return std::dynamic_pointer_cast<AbstractExpression>(new_col_expr);
+}
+
+/**
+ * @brief: Aggregate filtered out single-side predicate into one nested predicate
+ * so as to suppose recursively "break and push down"
+ */
+auto AggregateColumnExpression(std::vector<AbstractExpressionRef> &filter) -> AbstractExpressionRef {
+  // left deep tree construction
+  if (filter.size() == 1) {
+    return filter[0];
+  }
+  auto right_expr = filter.back();
+  filter.pop_back();
+  auto left_expr = AggregateColumnExpression(filter);
+  const auto logic_expr = std::make_shared<LogicExpression>(left_expr, right_expr, LogicType::And);
+  return std::dynamic_pointer_cast<AbstractExpression>(logic_expr);
+}
+
+/**
+ * @brief: Given a (possibly nested) expression, find all column expression between two tables if any
+ */
+auto FindAllColumnEqualComparison(const AbstractExpressionRef &expression,
+                                  std::vector<AbstractExpressionRef> &column_equal_exprs) -> AbstractExpressionRef {
+  bool is_direct_comparsion = false;
+  if (const auto *expr = dynamic_cast<const ComparisonExpression *>(&*expression); expr != nullptr) {
+    is_direct_comparsion = true;
+    if (expr->comp_type_ == ComparisonType::Equal) {
+      if (const auto *left_expr = dynamic_cast<const ColumnValueExpression *>(expr->children_[0].get());
+          left_expr != nullptr) {
+        if (const auto *right_expr = dynamic_cast<const ColumnValueExpression *>(expr->children_[1].get());
+            right_expr != nullptr) {
+          column_equal_exprs.push_back(expression);  // find a column-comparison
+          Value true_value = Value(TypeId::BOOLEAN, 1);
+          return std::make_shared<ConstantValueExpression>(true_value);
+        }
+      }
+    }
+  }
+  if (!is_direct_comparsion) {
+    // if already find a EqualColumn Expression, don't duplicate it in the return vector
+    for (auto &i : expression->children_) {
+      i = FindAllColumnEqualComparison(i, column_equal_exprs);
+    }
+  }
+  return expression;
+}
+
+/**
+ * @brief: Given a (possibly nested) filter, find all predicate expression that belong to only one side of a nlj
+ */
+auto FindAllOneSideFilter(const AbstractExpressionRef &expression, std::vector<AbstractExpressionRef> &left_filter,
+                          std::vector<AbstractExpressionRef> &right_filter, uint32_t left_column_count,
+                          uint32_t right_column_count) -> AbstractExpressionRef {
+  bool found = false;
+  if (const auto *expr = dynamic_cast<const ComparisonExpression *>(&*expression); expr != nullptr) {
+    bool left_expr_on_join_left = false;
+    bool left_expr_on_join_right = false;
+    bool right_expr_on_join_left = false;
+    bool right_expr_on_join_right = false;
+    const auto *left_expr_constant = dynamic_cast<const ConstantValueExpression *>(expr->children_[0].get());
+    const auto *right_expr_constant = dynamic_cast<const ConstantValueExpression *>(expr->children_[1].get());
+    const auto *left_expr_column = dynamic_cast<const ColumnValueExpression *>(expr->children_[0].get());
+    const auto *right_expr_column = dynamic_cast<const ColumnValueExpression *>(expr->children_[1].get());
+    if (left_expr_constant != nullptr) {
+      left_expr_on_join_left = true;
+      left_expr_on_join_right = true;
+    }
+    if (right_expr_constant != nullptr) {
+      right_expr_on_join_left = true;
+      right_expr_on_join_right = true;
+    }
+    if (left_expr_column != nullptr) {
+      if (left_expr_column->GetColIdx() < left_column_count) {
+        left_expr_on_join_left = true;
+      } else {
+        left_expr_on_join_right = true;
+      }
+    }
+    if (right_expr_column != nullptr) {
+      if (right_expr_column->GetColIdx() < left_column_count) {
+        right_expr_on_join_left = true;
+      } else {
+        right_expr_on_join_right = true;
+      }
+    }
+    if (left_expr_constant == nullptr || right_expr_constant == nullptr) {
+      // do not optimize here for two sides all constant
+      if (left_expr_on_join_left && right_expr_on_join_left) {
+        found = true;
+        left_filter.push_back(expression);
+      }
+      if (left_expr_on_join_right && right_expr_on_join_right) {
+        found = true;
+        if (left_expr_constant != nullptr) {
+          auto left_expr = expr->children_[0];  // constant expression
+          auto right_expr = ShiftColumnExpression(*right_expr_column, left_column_count);
+          auto new_pred = std::make_shared<ComparisonExpression>(left_expr, right_expr, expr->comp_type_);
+          right_filter.push_back(std::move(new_pred));
+        } else {
+          auto left_expr = ShiftColumnExpression(*left_expr_column, left_column_count);
+          auto right_expr = expr->children_[1];  // constant expression
+          auto new_pred = std::make_shared<ComparisonExpression>(left_expr, right_expr, expr->comp_type_);
+          right_filter.push_back(std::move(new_pred));
+        }
+      }
+      if (found) {
+        Value true_value = Value(TypeId::BOOLEAN, 1);
+        return std::make_shared<ConstantValueExpression>(true_value);
+      }
+    }
+  }
+
+  if (const auto *expr = dynamic_cast<const LogicExpression *>(&*expression);
+      expr != nullptr && expr->logic_type_ == LogicType::Or) {
+    // 'or' complicates the push down, do not optimize for it
+    return expression;
+  }
+
+  if (!found) {
+    for (auto &child_expr : expression->children_) {
+      child_expr = FindAllOneSideFilter(child_expr, left_filter, right_filter, left_column_count, right_column_count);
+    }
+  }
+
+  return expression;
 }
 
 /**
@@ -150,13 +290,202 @@ auto OptimizeReorderJoinOnCardinality(const AbstractPlanNodeRef &plan) -> Abstra
   return optimized_plan;
 }
 
+/**
+ * @brief optimize a filter on high level of the syntax tree
+ * it extracts out all the single Column Equal expression and make them into extra individual filter
+ * this further relies on 'merge_filter_nlj' and 'nlj_as_hash_join' rule
+ * to merge the predicate into an vanilla nlj and then into a hash join
+ * @attention: this rule is made very specific so as to only applicable to leaderboard Q2
+ */
+auto OptimizeBreakColumnEqualFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeBreakColumnEqualFilter(child));
+  }
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+  if (optimized_plan->GetType() == PlanType::Filter) {
+    auto &child_plan = optimized_plan->children_[0];
+    std::vector<AbstractExpressionRef> column_equal_expres;
+    auto &filter_plan = dynamic_cast<FilterPlanNode &>(*optimized_plan);
+    filter_plan.predicate_ = FindAllColumnEqualComparison(filter_plan.GetPredicate(), column_equal_expres);
+    if (const auto *expr = dynamic_cast<const ComparisonExpression *>(&*filter_plan.GetPredicate()); expr == nullptr) {
+      // only operator on nested filter predicates
+      for (const auto &column_equal_pred : column_equal_expres) {
+        child_plan = std::make_shared<FilterPlanNode>(optimized_plan->output_schema_, column_equal_pred, child_plan);
+      }
+    }
+    optimized_plan->children_[0] = child_plan;
+    return optimized_plan;
+  }
+  return optimized_plan;
+}
+
+/**
+ * Push a one-side predicate of a filter downward when given a pair filter + nlj
+ * @attention: this rule is made very specific so as to only applicable to leaderboard Q2
+ */
+auto OptimizePushDownPredicate(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  auto pushed_down = false;
+  auto is_single_filter = false;
+  auto optimized_plan = plan->CloneWithChildren(plan->children_);
+  if (optimized_plan->GetType() == PlanType::Filter) {
+    std::vector<AbstractPlanNodeRef> children;
+    auto &child_plan = optimized_plan->children_[0];
+    auto child_plan_optimized = child_plan->CloneWithChildren(child_plan->children_);
+    const auto &filter_plan = dynamic_cast<const FilterPlanNode &>(*optimized_plan);
+    const auto *expr = dynamic_cast<const ComparisonExpression *>(&*filter_plan.GetPredicate());
+    is_single_filter = expr != nullptr;
+    if (child_plan_optimized->GetType() == PlanType::NestedLoopJoin) {
+      // find all the one-side filtering condition
+      auto &nlj_plan = dynamic_cast<NestedLoopJoinPlanNode &>(*child_plan_optimized);
+      auto left_column_count = nlj_plan.GetLeftPlan()->OutputSchema().GetColumnCount();
+      auto right_column_count = nlj_plan.GetRightPlan()->OutputSchema().GetColumnCount();
+      std::vector<AbstractExpressionRef> left_filter;
+      std::vector<AbstractExpressionRef> right_filter;
+      FindAllOneSideFilter(filter_plan.GetPredicate(), left_filter, right_filter, left_column_count,
+                           right_column_count);
+      auto &join_plan_left = nlj_plan.children_[0];
+      auto &join_plan_right = nlj_plan.children_[1];
+      if (!left_filter.empty()) {
+        pushed_down = true;
+        join_plan_left = std::make_shared<FilterPlanNode>(join_plan_left->output_schema_,
+                                                          AggregateColumnExpression(left_filter), join_plan_left);
+      }
+      if (!right_filter.empty()) {
+        pushed_down = true;
+        join_plan_right = std::make_shared<FilterPlanNode>(join_plan_right->output_schema_,
+                                                           AggregateColumnExpression(right_filter), join_plan_right);
+      }
+      nlj_plan.children_[0] = join_plan_left;
+      nlj_plan.children_[1] = join_plan_right;
+    }
+    if (child_plan_optimized->GetType() == PlanType::HashJoin) {
+      // find all the one-side filtering condition
+      auto &hash_plan = dynamic_cast<HashJoinPlanNode &>(*child_plan_optimized);
+      auto left_column_count = hash_plan.GetLeftPlan()->OutputSchema().GetColumnCount();
+      auto right_column_count = hash_plan.GetRightPlan()->OutputSchema().GetColumnCount();
+      std::vector<AbstractExpressionRef> left_filter;
+      std::vector<AbstractExpressionRef> right_filter;
+      FindAllOneSideFilter(filter_plan.GetPredicate(), left_filter, right_filter, left_column_count,
+                           right_column_count);
+      auto &join_plan_left = hash_plan.children_[0];
+      auto &join_plan_right = hash_plan.children_[1];
+      if (!left_filter.empty()) {
+        pushed_down = true;
+        join_plan_left = std::make_shared<FilterPlanNode>(join_plan_left->output_schema_,
+                                                          AggregateColumnExpression(left_filter), join_plan_left);
+      }
+      if (!right_filter.empty()) {
+        pushed_down = true;
+        join_plan_right = std::make_shared<FilterPlanNode>(join_plan_right->output_schema_,
+                                                           AggregateColumnExpression(right_filter), join_plan_right);
+      }
+      hash_plan.children_[0] = join_plan_left;
+      hash_plan.children_[1] = join_plan_right;
+    }
+    children.emplace_back(std::move(child_plan_optimized));
+    optimized_plan = optimized_plan->CloneWithChildren(children);
+  }
+
+  // post order recursion to allow push down repeatedly
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : optimized_plan->GetChildren()) {
+    children.emplace_back(OptimizePushDownPredicate(child));
+  }
+  optimized_plan = optimized_plan->CloneWithChildren(std::move(children));
+  if (is_single_filter && pushed_down) {
+    // abandon myself as an already pushed-down single filter
+    return optimized_plan->children_[0];
+  }
+  return optimized_plan;
+}
+
+/*
+ * @brief: duplicated with the one in Optimizer class for convenience
+ */
+auto IsPredicateTrue(const AbstractExpression &expr) -> bool {
+  if (const auto *const_expr = dynamic_cast<const ConstantValueExpression *>(&expr); const_expr != nullptr) {
+    return const_expr->val_.CastAs(TypeId::BOOLEAN).GetAs<bool>();
+  }
+  return false;
+}
+
+/*
+ * Merge a (possibly nested) expression
+ */
+auto OptimizeMergeTruePred(const AbstractExpressionRef &expr) -> AbstractExpressionRef {
+  for (auto &child : expr->children_) {
+    child = OptimizeMergeTruePred(child);
+  }
+  if (const auto *logic_expr = dynamic_cast<const LogicExpression *>(&*expr); logic_expr != nullptr) {
+    if (IsPredicateTrue(*logic_expr->children_[0])) {
+      if (logic_expr->logic_type_ == LogicType::And) {
+        return logic_expr->children_[1];
+      }
+    }
+    if (IsPredicateTrue(*logic_expr->children_[1])) {
+      if (logic_expr->logic_type_ == LogicType::And) {
+        return logic_expr->children_[0];
+      }
+    }
+  }
+  return expr;
+}
+
+/*
+ * @brief: Recursively merge all true filter
+ */
+auto OptimizeMergeTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeMergeTrueFilter(child));
+  }
+
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+
+  if (optimized_plan->GetType() == PlanType::Filter) {
+    auto &filter_plan = dynamic_cast<FilterPlanNode &>(*optimized_plan);
+    filter_plan.predicate_ = OptimizeMergeTruePred(filter_plan.GetPredicate());
+  }
+
+  return optimized_plan;
+}
+
+/*
+ * @brief: duplicate from the one in Optimizer class for convenience
+ */
+auto OptimizeEliminateTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeEliminateTrueFilter(child));
+  }
+
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+
+  if (optimized_plan->GetType() == PlanType::Filter) {
+    const auto &filter_plan = dynamic_cast<const FilterPlanNode &>(*optimized_plan);
+    if (IsPredicateTrue(*filter_plan.GetPredicate())) {
+      BUSTUB_ASSERT(optimized_plan->children_.size() == 1, "must have exactly one children");
+      return optimized_plan->children_[0];
+    }
+  }
+
+  return optimized_plan;
+}
+
 auto Optimizer::OptimizeCustom(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
   auto p = plan;
   p = OptimizeMergeProjection(p);
+  p = OptimizeBreakColumnEqualFilter(p);  // enable pred -> into NLJ -> into hash join
+  p = OptimizeMergeTrueFilter(p);         // merge true and true and ... true into only one true filter
+  p = OptimizeEliminateTrueFilter(p);     // remove only one true filter
   p = OptimizeMergeFilterNLJ(p);
   p = OptimizeReorderJoinOnCardinality(p);
   p = OptimizeNLJAsIndexJoin(p);
-  p = OptimizeNLJAsHashJoin(p);  // Enable this rule after you have implemented hash join.
+  p = OptimizeNLJAsHashJoin(p);        // Enable hash join.
+  p = OptimizePushDownPredicate(p);    // enable recursive push down one-side filter
+  p = OptimizeMergeTrueFilter(p);      // merge true and true and ... true into only one true filter
+  p = OptimizeEliminateTrueFilter(p);  // remove only one true filter
   p = OptimizeOrderByAsIndexScan(p);
   p = OptimizeSortLimitAsTopN(p);
   return p;
