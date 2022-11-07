@@ -4,11 +4,14 @@
 #include "execution/expressions/constant_value_expression.h"
 #include "execution/expressions/logic_expression.h"
 #include "execution/plans/abstract_plan.h"
+#include "execution/plans/aggregation_plan.h"
 #include "execution/plans/filter_plan.h"
 #include "execution/plans/hash_join_plan.h"
 #include "execution/plans/mock_scan_plan.h"
 #include "execution/plans/nested_loop_join_plan.h"
+#include "execution/plans/projection_plan.h"
 #include "execution/plans/seq_scan_plan.h"
+#include "execution/plans/values_plan.h"
 #include "optimizer/optimizer.h"
 
 // Note for 2022 Fall: You can add all optimizer rule implementations and apply the rules as you want in this file. Note
@@ -193,6 +196,19 @@ auto FindAllOneSideFilter(const AbstractExpressionRef &expression, std::vector<A
   }
 
   return expression;
+}
+
+/**
+ * Given the (possibly nested) projection expression, find all the column idx the aggregate corresponds to
+ */
+auto FindAllColumnIdx(const AbstractExpressionRef &expression, std::vector<size_t> &column_idxs) -> void {
+  if (const auto *expr = dynamic_cast<const ColumnValueExpression *>(&*expression); expr != nullptr) {
+    column_idxs.push_back(expr->GetColIdx());
+    return;
+  }
+  for (const auto &sub_expr : expression->children_) {
+    FindAllColumnIdx(sub_expr, column_idxs);
+  }
 }
 
 /**
@@ -400,7 +416,7 @@ auto OptimizePushDownPredicate(const AbstractPlanNodeRef &plan) -> AbstractPlanN
   return optimized_plan;
 }
 
-/*
+/**
  * @brief: duplicated with the one in Optimizer class for convenience
  */
 auto IsPredicateTrue(const AbstractExpression &expr) -> bool {
@@ -410,7 +426,7 @@ auto IsPredicateTrue(const AbstractExpression &expr) -> bool {
   return false;
 }
 
-/*
+/**
  * Merge a (possibly nested) expression
  */
 auto OptimizeMergeTruePred(const AbstractExpressionRef &expr) -> AbstractExpressionRef {
@@ -432,7 +448,7 @@ auto OptimizeMergeTruePred(const AbstractExpressionRef &expr) -> AbstractExpress
   return expr;
 }
 
-/*
+/**
  * @brief: Recursively merge all true filter
  */
 auto OptimizeMergeTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
@@ -451,7 +467,7 @@ auto OptimizeMergeTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNod
   return optimized_plan;
 }
 
-/*
+/**
  * @brief: duplicate from the one in Optimizer class for convenience
  */
 auto OptimizeEliminateTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
@@ -473,19 +489,138 @@ auto OptimizeEliminateTrueFilter(const AbstractPlanNodeRef &plan) -> AbstractPla
   return optimized_plan;
 }
 
+/*
+ * @brief: remove a single '1 = 2' kind of always false filter to a dummy empty value plan node
+ */
+auto OptimizeEliminateSingleFalseFilter(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeEliminateSingleFalseFilter(child));
+  }
+
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+
+  if (optimized_plan->GetType() == PlanType::Filter) {
+    const auto &filter_plan = dynamic_cast<const FilterPlanNode &>(*optimized_plan);
+    if (const auto *comp_expr = dynamic_cast<const ComparisonExpression *>(&*filter_plan.GetPredicate());
+        comp_expr != nullptr) {
+      if (comp_expr->comp_type_ == ComparisonType::Equal) {
+        if (const auto *left_const_expr = dynamic_cast<const ConstantValueExpression *>(comp_expr->children_[0].get());
+            left_const_expr != nullptr) {
+          if (const auto *right_const_expr =
+                  dynamic_cast<const ConstantValueExpression *>(comp_expr->children_[1].get());
+              right_const_expr != nullptr) {
+            if (left_const_expr->val_.CompareEquals(right_const_expr->val_) == CmpBool::CmpFalse) {
+              return std::make_shared<ValuesPlanNode>(optimized_plan->output_schema_,
+                                                      std::vector<std::vector<AbstractExpressionRef>>{});
+            }
+          }
+        }
+      }
+    }
+  }
+  return optimized_plan;
+}
+
+/**
+ * @brief: if two consecutive filter F1 and F2 is such that F1 is a subset of F2, replace F2 with F1
+ */
+auto OptimizeIntersectProjection(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeIntersectProjection(child));
+  }
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+  if (optimized_plan->GetType() == PlanType::Projection) {
+    const auto &projection_plan = dynamic_cast<const ProjectionPlanNode &>(*optimized_plan);
+    const auto &child_plan = optimized_plan->children_[0];
+    if (child_plan->GetType() == PlanType::Projection) {
+      const auto &child_project_plan = dynamic_cast<const ProjectionPlanNode &>(*child_plan);
+      const auto &exprs = projection_plan.GetExpressions();
+      const auto child_exprs = child_project_plan.GetExpressions();
+      auto is_all_column_exprs = true;
+      std::vector<uint32_t> subset_idxs;
+      for (const auto &expr : exprs) {
+        auto column_value_expr = dynamic_cast<const ColumnValueExpression *>(expr.get());
+        if (column_value_expr == nullptr) {
+          is_all_column_exprs = false;
+          break;
+        }
+      }
+      if (is_all_column_exprs) {
+        std::vector<Column> retain_cols;
+        std::vector<AbstractExpressionRef> retain_projs;
+        for (const auto &expr : exprs) {
+          auto column_value_expr = dynamic_cast<const ColumnValueExpression *>(expr.get());
+          retain_cols.push_back(child_project_plan.output_schema_->GetColumn(column_value_expr->GetColIdx()));
+          retain_projs.push_back(child_exprs[column_value_expr->GetColIdx()]);
+        }
+        return std::make_shared<ProjectionPlanNode>(std::make_shared<Schema>(retain_cols), retain_projs,
+                                                    child_plan->children_[0]);
+      }
+    }
+  }
+  return optimized_plan;
+}
+
+/**
+ * @brief: if a pair filter + aggregate is present, eliminate unnecessary aggregate column
+ */
+auto OptimizeAggregateColumnPrune(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
+  std::vector<AbstractPlanNodeRef> children;
+  for (const auto &child : plan->GetChildren()) {
+    children.emplace_back(OptimizeAggregateColumnPrune(child));
+  }
+  auto optimized_plan = plan->CloneWithChildren(std::move(children));
+  if (optimized_plan->GetType() == PlanType::Projection) {
+    const auto &projection_plan = dynamic_cast<const ProjectionPlanNode &>(*optimized_plan);
+    const auto &child_plan = optimized_plan->children_[0];
+    if (child_plan->GetType() == PlanType::Aggregation) {
+      const auto &agg_plan = dynamic_cast<const AggregationPlanNode &>(*child_plan);
+      std::vector<size_t> agg_idxs;
+      for (const auto &proj : projection_plan.GetExpressions()) {
+        FindAllColumnIdx(proj, agg_idxs);
+      }
+      std::vector<Column> new_out_cols;
+      std::vector<AbstractExpressionRef> new_aggregates;
+      std::vector<AggregationType> new_agg_types;
+      const auto &agg_old_out_columns = agg_plan.output_schema_->GetColumns();
+      // group by columns is placed at the front of output schema
+      new_out_cols.insert(new_out_cols.end(), agg_old_out_columns.begin(),
+                          agg_old_out_columns.begin() + agg_plan.group_bys_.size());
+      auto group_by_size = agg_plan.group_bys_.size();
+      for (const auto &idx : agg_idxs) {
+        if (idx >= group_by_size) {
+          new_out_cols.push_back(agg_plan.output_schema_->GetColumn(idx));
+          new_aggregates.push_back(agg_plan.GetAggregateAt(idx - group_by_size));
+          new_agg_types.push_back(agg_plan.GetAggregateTypes()[idx - group_by_size]);
+        }
+      }
+      optimized_plan->children_[0] =
+          std::make_shared<AggregationPlanNode>(std::make_shared<Schema>(new_out_cols), agg_plan.children_[0],
+                                                agg_plan.group_bys_, new_aggregates, new_agg_types);
+    }
+  }
+  return optimized_plan;
+}
+
 auto Optimizer::OptimizeCustom(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
   auto p = plan;
   p = OptimizeMergeProjection(p);
+  p = OptimizeIntersectProjection(p);  // merge consecutive project if upper is a subset of the lower
+  p = OptimizeAggregateColumnPrune(
+      p);  // prune aggregate column if an projection is present above it and only takes a subset
   p = OptimizeBreakColumnEqualFilter(p);  // enable pred -> into NLJ -> into hash join
   p = OptimizeMergeTrueFilter(p);         // merge true and true and ... true into only one true filter
   p = OptimizeEliminateTrueFilter(p);     // remove only one true filter
   p = OptimizeMergeFilterNLJ(p);
   p = OptimizeReorderJoinOnCardinality(p);
   p = OptimizeNLJAsIndexJoin(p);
-  p = OptimizeNLJAsHashJoin(p);        // Enable hash join.
-  p = OptimizePushDownPredicate(p);    // enable recursive push down one-side filter
-  p = OptimizeMergeTrueFilter(p);      // merge true and true and ... true into only one true filter
-  p = OptimizeEliminateTrueFilter(p);  // remove only one true filter
+  p = OptimizeNLJAsHashJoin(p);               // Enable hash join.
+  p = OptimizePushDownPredicate(p);           // enable recursive push down one-side filter
+  p = OptimizeMergeTrueFilter(p);             // merge true and true and ... true into only one true filter
+  p = OptimizeEliminateTrueFilter(p);         // remove only one true filter
+  p = OptimizeEliminateSingleFalseFilter(p);  // replace single always-false filter to empty dummy node
   p = OptimizeOrderByAsIndexScan(p);
   p = OptimizeSortLimitAsTopN(p);
   return p;
