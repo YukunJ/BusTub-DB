@@ -153,11 +153,9 @@ void RowLockTest1() {
   /** Each transaction takes an S lock on the same table and row and then unlocks */
   auto task = [&](int txn_id) {
     bool res;
-
     res = lock_mgr.LockTable(txns[txn_id], LockManager::LockMode::SHARED, oid);
     EXPECT_TRUE(res);
     CheckGrowing(txns[txn_id]);
-
     res = lock_mgr.LockRow(txns[txn_id], LockManager::LockMode::SHARED, oid, rid);
     EXPECT_TRUE(res);
     CheckGrowing(txns[txn_id]);
@@ -190,7 +188,7 @@ void RowLockTest1() {
     delete txns[i];
   }
 }
-TEST(LockManagerTest, DISABLED_RowLockTest1) { RowLockTest1(); }  // NOLINT
+TEST(LockManagerTest, RowLockTest1) { RowLockTest1(); }  // NOLINT
 
 void TwoPLTest1() {
   LockManager lock_mgr{};
