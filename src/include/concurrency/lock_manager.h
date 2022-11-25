@@ -65,24 +65,18 @@ class LockManager {
 
   class LockRequestQueue {
    public:
-    //    ~LockRequestQueue() {
-    //      /* release all the lock request */
-    //      for (const auto ptr : request_queue_) {
-    //        delete ptr;
-    //      }
-    //    }
-
     /**
      * Place a newly-generated request into queue at either the first un-granted position or the tail
      * @param request pointer to a allocated request
      * @param place_first True if need to be placed at the first un-granted position
      */
-    void InsertIntoQueue(LockRequest *request, bool place_first) {
+    void InsertIntoQueue(const std::shared_ptr<LockRequest> &request, bool place_first) {
       if (!place_first) {
         request_queue_.push_back(request);
+        return;
       }
       const auto it = std::find_if_not(request_queue_.begin(), request_queue_.end(),
-                                       [](LockRequest *request) { return request->granted_; });
+                                       [](const std::shared_ptr<LockRequest> &request) { return request->granted_; });
       request_queue_.insert(it, request);
     }
 
@@ -91,7 +85,7 @@ class LockManager {
      * @param next the first un-granted request in the queue
      * @return True if next's lock mode is compatible with all previous granted requests in the queue
      */
-    auto IsCompatibleUntil(std::list<LockRequest *>::iterator next,
+    auto IsCompatibleUntil(std::list<std::shared_ptr<LockRequest>>::iterator next,
                            std::unordered_map<LockMode, std::unordered_set<LockMode>> &compatible_matrix) -> bool {
       for (auto it = request_queue_.begin(); it != next; it++) {
         if (compatible_matrix[(*it)->lock_mode_].find((*next)->lock_mode_) ==
@@ -103,7 +97,7 @@ class LockManager {
     }
 
     /** List of lock requests for the same resource (table or row) */
-    std::list<LockRequest *> request_queue_;
+    std::list<std::shared_ptr<LockRequest>> request_queue_;
     /** For notifying blocked transactions on this rid */
     std::condition_variable cv_;
     /** txn_id of an upgrading transaction (if any) */
@@ -209,6 +203,7 @@ class LockManager {
    * Check if a unlocking request is valid based on the isolation level and phase of the transaction
    * @param transaction the transaction making request
    * @param reason[out] if this request is to be aborted, populated with abort reason
+   * @param mode[out] the locked mode held by the transaction
    * @param queue the request queue for this specific resource
    * @param on_table True if this is a request on table, False if on row
    * @param table_id the table id
@@ -216,8 +211,16 @@ class LockManager {
    * @precondition holding mutex for the corresponding resource's request queue
    * @return True if this is a valid request, False otherwise with abort reason populated to be thrown
    */
-  auto IsUnlockRequestValid(Transaction *transaction, AbortReason &reason, std::shared_ptr<LockRequestQueue> &queue,
-                            bool on_table, table_oid_t table_id, RID rid) -> bool;
+  auto IsUnlockRequestValid(Transaction *transaction, AbortReason &reason, LockMode &mode,
+                            std::shared_ptr<LockRequestQueue> &queue, bool on_table, table_oid_t table_id, RID rid)
+      -> bool;
+
+  /**
+   * Potentially change the transaction state to Shrinking
+   * @param transaction the transaction unlocking a resource
+   * @param unlock_mode the previous mode locked
+   */
+  void UpdateTransactionStateOnUnlock(Transaction *transaction, LockMode unlock_mode);
 
   /**
    * Check if a pending locking request could proceed
@@ -233,8 +236,9 @@ class LockManager {
    * @precondition holding mutex for the corresponding resource's request queue
    * @return True if could exit the condition variable waiting (should check if should_abort variable)
    */
-  auto CouldLockRequestProceed(LockRequest *request, Transaction *txn, const std::shared_ptr<LockRequestQueue> &queue,
-                               bool is_upgrade, bool &already_abort) -> bool;
+  auto CouldLockRequestProceed(const std::shared_ptr<LockManager::LockRequest> &request, Transaction *txn,
+                               const std::shared_ptr<LockRequestQueue> &queue, bool is_upgrade, bool &already_abort)
+      -> bool;
 
   /**
    * [LOCK_NOTE]
@@ -381,6 +385,9 @@ class LockManager {
    */
   auto UnlockTable(Transaction *txn, const table_oid_t &oid) -> bool;
 
+  /** Wrapper for UnlockTable, some special case for if this unlock is from upgrade locking request */
+  auto UnlockTableHelper(Transaction *txn, const table_oid_t &oid, bool from_upgrade = false) -> bool;
+
   /**
    * Acquire a lock on rid in the given lock_mode.
    * If the transaction already holds a lock on the row, upgrade the lock
@@ -412,6 +419,9 @@ class LockManager {
    * @return true if the unlock is successful, false otherwise
    */
   auto UnlockRow(Transaction *txn, const table_oid_t &oid, const RID &rid) -> bool;
+
+  /** Wrapper for UnlockTable, some special case for if this unlock is from upgrade locking request */
+  auto UnlockRowHelper(Transaction *txn, const table_oid_t &oid, const RID &rid, bool from_upgrade = false) -> bool;
 
   /*** Graph API ***/
 
@@ -461,11 +471,13 @@ class LockManager {
 
   /** Structure that holds lock requests for a given RID */
   std::unordered_map<RID, std::shared_ptr<LockRequestQueue>> row_lock_map_;
+
   /** Coordination */
   std::mutex row_lock_map_latch_;
 
   std::atomic<bool> enable_cycle_detection_;
   std::thread *cycle_detection_thread_;
+
   /** Waits-for graph representation. */
   std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
   std::mutex waits_for_latch_;
