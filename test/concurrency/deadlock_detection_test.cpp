@@ -21,6 +21,23 @@
       << "Test Failed Due to Time Out";
 
 namespace bustub {
+
+TEST(LockManagerDeadlockDetectionTest, DFS_Test) {
+  /* mimic GradeScope's LockManagerDeadlockDetectionTest.GraphTest */
+  LockManager lock_mgr{};
+  lock_mgr.AddEdge(0, 1);
+  lock_mgr.AddEdge(1, 2);
+  lock_mgr.AddEdge(2, 3);
+  lock_mgr.AddEdge(2, 6);
+  lock_mgr.AddEdge(3, 4);
+  lock_mgr.AddEdge(4, 5);
+  lock_mgr.AddEdge(6, 7);
+  lock_mgr.AddEdge(7, 2);
+  txn_id_t cycle_txn_id;
+  EXPECT_EQ(true, lock_mgr.HasCycle(&cycle_txn_id));
+  EXPECT_EQ(7, cycle_txn_id);
+}
+
 TEST(LockManagerDeadlockDetectionTest, DISABLED_EdgeTest) {
   LockManager lock_mgr{};
 

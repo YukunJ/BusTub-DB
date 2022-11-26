@@ -507,14 +507,40 @@ auto LockManager::UnlockRowHelper(Transaction *txn, const table_oid_t &oid, cons
   return true;
 }
 
-void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) { waits_for_[t1].emplace(t2); }
 
-void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) { waits_for_[t1].erase(t2); }
 
-auto LockManager::HasCycle(txn_id_t *txn_id) -> bool { return false; }
+auto LockManager::HasCycle(txn_id_t *txn_id) -> bool {
+  // assume the graph is already fully built
+  const auto &list = LockManager::GetEdgeList();
+  std::deque<txn_id_t> path;
+  std::set<txn_id_t> visited;
+  for (const auto &[start_node, end_node_set] : waits_for_) {
+    if (visited.find(start_node) == visited.end()) {
+      auto cycle_id = DepthFirstSearch(start_node, visited, path);
+      if (cycle_id != NO_CYCLE) {
+        std::for_each(path.begin(), path.end(), [](const auto &it) { std::cout << it << " "; });
+        // trim the path and retain only those involved in cycle
+        auto it = std::find(path.begin(), path.end(), cycle_id);
+        path.erase(path.begin(), it);
+        std::sort(path.begin(), path.end());
+        txn_id_t to_abort = path.back();
+        *txn_id = to_abort;  // pick the youngest to abort
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 auto LockManager::GetEdgeList() -> std::vector<std::pair<txn_id_t, txn_id_t>> {
-  std::vector<std::pair<txn_id_t, txn_id_t>> edges(0);
+  std::vector<std::pair<txn_id_t, txn_id_t>> edges;
+  for (const auto &[start_edge, end_edge_set] : waits_for_) {
+    for (const auto &end_edge : end_edge_set) {
+      edges.emplace_back(start_edge, end_edge);
+    }
+  }
   return edges;
 }
 
@@ -522,6 +548,22 @@ void LockManager::RunCycleDetection() {
   while (enable_cycle_detection_) {
     std::this_thread::sleep_for(cycle_detection_interval);
     {  // TODO(students): detect deadlock
+      // no more new transaction requests from this point
+      std::unique_lock table_lock(table_lock_map_latch_);
+      std::unique_lock row_lock(row_lock_map_latch_);
+      LockManager::RebuildWaitForGraph();
+      txn_id_t to_abort_txn = NO_CYCLE;
+      while (LockManager::HasCycle(&to_abort_txn)) {
+        // remove this transaction from graph
+        LockManager::TrimGraph(to_abort_txn);
+        // set this transaction as aborted
+        auto to_abort_ptr = TransactionManager::GetTransaction(to_abort_txn);
+        to_abort_ptr->SetState(TransactionState::ABORTED);
+      }
+      if (to_abort_txn != NO_CYCLE) {
+        // if we ever find a single cycle to be aborted, notify everyone
+        LockManager::NotifyAllTransaction();
+      }
     }
   }
 }

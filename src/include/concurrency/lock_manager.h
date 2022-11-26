@@ -14,9 +14,12 @@
 
 #include <algorithm>
 #include <condition_variable>  // NOLINT
+#include <deque>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>  // NOLINT
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -29,6 +32,9 @@
 namespace bustub {
 
 class TransactionManager;
+
+/* Macro for txn_id_t return value indicating no cycle detected */
+#define NO_CYCLE -1  // NOLINT
 
 /**
  * LockManager handles transactions asking for locks on records.
@@ -459,6 +465,94 @@ class LockManager {
  private:
   /** Fall 2022 */
 
+  /**
+   * Refresh and Rebuild the whole wait for graph
+   * everytime the back running thread wakes up
+   */
+  void RebuildWaitForGraph() {
+    waits_for_.clear();
+    for (const auto &[table_id, request_queue] : table_lock_map_) {
+      std::set<txn_id_t> granted;
+      for (const auto &request : request_queue->request_queue_) {
+        if (request->granted_) {
+          granted.insert(request->txn_id_);
+        } else {
+          // waits for a resource, build an edge
+          for (const auto &holder : granted) {
+            AddEdge(request->txn_id_, holder);
+          }
+        }
+      }
+    }
+    for (const auto &[row_id, request_queue] : row_lock_map_) {
+      std::set<txn_id_t> granted;
+      for (const auto &request : request_queue->request_queue_) {
+        if (request->granted_) {
+          granted.insert(request->txn_id_);
+        } else {
+          // waits for a resource, build an edge
+          for (const auto &holder : granted) {
+            AddEdge(request->txn_id_, holder);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Trim the already built waitfor graph when we decide to abort a transaction
+   */
+  void TrimGraph(txn_id_t aborted_txn) {
+    waits_for_.erase(aborted_txn);
+    for (auto &[start_node, end_node_set] : waits_for_) {
+      end_node_set.erase(aborted_txn);
+    }
+  }
+
+  /**
+   * Helper function to run DFS search on the wait_for graph
+   * the path is the current walking path and once cycle detected, it should main
+   * t0 -> t1 -> ... -> t0 such a cycle path
+   * @return the first txn_id of the cycle
+   */
+  auto DepthFirstSearch(txn_id_t curr, std::set<txn_id_t> &visited, std::deque<txn_id_t> &path) -> txn_id_t {
+    // mark curr node as visited and append to current path
+    visited.insert(curr);
+    path.push_back(curr);
+
+    if (waits_for_.find(curr) != waits_for_.end()) {
+      for (const auto &neighbor : waits_for_[curr]) {
+        if (visited.find(neighbor) == visited.end()) {
+          // this neighbor not visited yet
+          auto cycle_id = DepthFirstSearch(neighbor, visited, path);
+          if (cycle_id != NO_CYCLE) {
+            // a cycle is detected ahead
+            return cycle_id;
+          }
+        } else if (std::find(path.begin(), path.end(), neighbor) != path.end()) {
+          // back edge detected
+          return neighbor;
+        }
+      }
+    }
+    // remove from curr path
+    path.pop_back();
+    return NO_CYCLE;
+  }
+
+  /**
+   * When we abort a transaction due to deadlock detection
+   * notify every waiting thread about this change
+   */
+  void NotifyAllTransaction() {
+    for (const auto &[table_id, request_queue] : table_lock_map_) {
+      request_queue->cv_.notify_all();
+    }
+    for (const auto &[row_id, request_queue] : row_lock_map_) {
+      request_queue->cv_.notify_all();
+    }
+  }
+
   /** compatible matrix to test if a new request could proceed given previous granted requests */
   std::unordered_map<LockMode, std::unordered_set<LockMode>> compatible_matrix_;
   /** upgrade matrix to test if a new upgrade request could proceed given previous granted requests */
@@ -479,7 +573,7 @@ class LockManager {
   std::thread *cycle_detection_thread_;
 
   /** Waits-for graph representation. */
-  std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
+  std::map<txn_id_t, std::set<txn_id_t>> waits_for_;
   std::mutex waits_for_latch_;
 };
 
