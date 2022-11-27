@@ -14,9 +14,12 @@
 
 #include <algorithm>
 #include <condition_variable>  // NOLINT
+#include <deque>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>  // NOLINT
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -29,6 +32,9 @@
 namespace bustub {
 
 class TransactionManager;
+
+/* Macro for txn_id_t return value indicating no cycle detected */
+#define NO_CYCLE -1  // NOLINT
 
 /**
  * LockManager handles transactions asking for locks on records.
@@ -45,9 +51,9 @@ class LockManager {
   class LockRequest {
    public:
     LockRequest(txn_id_t txn_id, LockMode lock_mode, table_oid_t oid) /** Table lock request */
-        : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid) {}
+        : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid), on_table_(true) {}
     LockRequest(txn_id_t txn_id, LockMode lock_mode, table_oid_t oid, RID rid) /** Row lock request */
-        : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid), rid_(rid) {}
+        : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid), rid_(rid), on_table_(false) {}
 
     /** Txn_id of the txn requesting the lock */
     txn_id_t txn_id_;
@@ -57,14 +63,47 @@ class LockManager {
     table_oid_t oid_;
     /** Rid of the row for a row lock; unused for table locks */
     RID rid_;
+    /** whether the request is on table or on row */
+    bool on_table_;
     /** Whether the lock has been granted or not */
     bool granted_{false};
   };
 
   class LockRequestQueue {
    public:
+    /**
+     * Place a newly-generated request into queue at either the first un-granted position or the tail
+     * @param request pointer to a allocated request
+     * @param place_first True if need to be placed at the first un-granted position
+     */
+    void InsertIntoQueue(const std::shared_ptr<LockRequest> &request, bool place_first) {
+      if (!place_first) {
+        request_queue_.push_back(request);
+        return;
+      }
+      const auto it = std::find_if_not(request_queue_.begin(), request_queue_.end(),
+                                       [](const std::shared_ptr<LockRequest> &request) { return request->granted_; });
+      request_queue_.insert(it, request);
+    }
+
+    /**
+     * Check if all the previous granted request's lock mode is compatible up to until next
+     * @param next the first un-granted request in the queue
+     * @return True if next's lock mode is compatible with all previous granted requests in the queue
+     */
+    auto IsCompatibleUntil(std::list<std::shared_ptr<LockRequest>>::iterator next,
+                           std::unordered_map<LockMode, std::unordered_set<LockMode>> &compatible_matrix) -> bool {
+      for (auto it = request_queue_.begin(); it != next; it++) {
+        if (compatible_matrix[(*it)->lock_mode_].find((*next)->lock_mode_) ==
+            compatible_matrix[(*it)->lock_mode_].end()) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     /** List of lock requests for the same resource (table or row) */
-    std::list<LockRequest *> request_queue_;
+    std::list<std::shared_ptr<LockRequest>> request_queue_;
     /** For notifying blocked transactions on this rid */
     std::condition_variable cv_;
     /** txn_id of an upgrading transaction (if any) */
@@ -74,9 +113,42 @@ class LockManager {
   };
 
   /**
+   * Allocate a compatible matrix to check if a request could proceed
+   * the key is the lock held by previous request, the value is lock mode allowed to be proceeded for new requests
+   * @return compatible matrix
+   */
+  static auto MakeCompatibleMatrix() -> std::unordered_map<LockMode, std::unordered_set<LockMode>> {
+    std::unordered_map<LockMode, std::unordered_set<LockMode>> compatible_matrix;
+    compatible_matrix[LockMode::INTENTION_SHARED].insert({LockMode::INTENTION_SHARED, LockMode::INTENTION_EXCLUSIVE,
+                                                          LockMode::SHARED, LockMode::SHARED_INTENTION_EXCLUSIVE});
+    compatible_matrix[LockMode::INTENTION_EXCLUSIVE].insert(
+        {LockMode::INTENTION_SHARED, LockMode::INTENTION_EXCLUSIVE});
+    compatible_matrix[LockMode::SHARED].insert({LockMode::INTENTION_SHARED, LockMode::SHARED});
+    compatible_matrix[LockMode::SHARED_INTENTION_EXCLUSIVE].insert({LockMode::INTENTION_SHARED});
+    compatible_matrix[LockMode::EXCLUSIVE].insert({});
+    return compatible_matrix;
+  }
+
+  /**
+   * Allocate a upgrade matrix to help check if a upgrading request could upgrading towards the correct direction
+   * the key is the lock mode held by this transaction before on this resource, the value is allowed upgrading modes
+   * @return update matrix
+   */
+  static auto MakeUpgradeMatrix() -> std::unordered_map<LockMode, std::unordered_set<LockMode>> {
+    std::unordered_map<LockMode, std::unordered_set<LockMode>> upgrade_matrix;
+    upgrade_matrix[LockMode::INTENTION_SHARED].insert(
+        {LockMode::SHARED, LockMode::EXCLUSIVE, LockMode::INTENTION_EXCLUSIVE, LockMode::SHARED_INTENTION_EXCLUSIVE});
+    upgrade_matrix[LockMode::SHARED].insert({LockMode::EXCLUSIVE, LockMode::SHARED_INTENTION_EXCLUSIVE});
+    upgrade_matrix[LockMode::INTENTION_EXCLUSIVE].insert({LockMode::EXCLUSIVE, LockMode::SHARED_INTENTION_EXCLUSIVE});
+    upgrade_matrix[LockMode::SHARED_INTENTION_EXCLUSIVE].insert({LockMode::EXCLUSIVE});
+    upgrade_matrix[LockMode::EXCLUSIVE].insert({});
+    return upgrade_matrix;
+  }
+
+  /**
    * Creates a new lock manager configured for the deadlock detection policy.
    */
-  LockManager() {
+  LockManager() : compatible_matrix_(MakeCompatibleMatrix()), upgrade_matrix_(MakeUpgradeMatrix()) {
     enable_cycle_detection_ = true;
     cycle_detection_thread_ = new std::thread(&LockManager::RunCycleDetection, this);
   }
@@ -86,6 +158,93 @@ class LockManager {
     cycle_detection_thread_->join();
     delete cycle_detection_thread_;
   }
+
+  /**
+   * Get the shared pointer of LockRequestQueue from map
+   * to avoid race condition, grab latch on map first
+   * @param table_oid the requesting table id
+   * @return shared_ptr to the LockRequestQueue for this table
+   */
+  auto GetTableQueue(table_oid_t table_oid) -> std::shared_ptr<LockRequestQueue> {
+    std::lock_guard<std::mutex> lock(table_lock_map_latch_);
+    if (table_lock_map_.find(table_oid) == table_lock_map_.end()) {
+      table_lock_map_.insert({table_oid, std::make_shared<LockRequestQueue>()});
+    }
+    return table_lock_map_[table_oid];
+  }
+
+  /**
+   * Get the shared pointer of LockRequestQueue from map
+   * to avoid race condition, grab latch on map first
+   * @param rid the requesting row id
+   * @return shared_ptr to the LockRequestQueue for this row
+   */
+  auto GetRowQueue(RID rid) -> std::shared_ptr<LockRequestQueue> {
+    std::lock_guard<std::mutex> lock(row_lock_map_latch_);
+    if (row_lock_map_.find(rid) == row_lock_map_.end()) {
+      row_lock_map_.insert({rid, std::make_shared<LockRequestQueue>()});
+    }
+    return row_lock_map_[rid];
+  }
+
+  /**
+   * Check if a locking request is valid based on the isolation level and phase of the transaction
+   * @param transaction the transaction making request
+   * @param reason[out] if this request is to be aborted, populated with abort reason
+   * @param is_upgrade[out] if this request is an upgrade request, populated True
+   * @param prev_mode[out] if this request is an upgrade request, populated previous lock mode
+   * @param queue the request queue for this specific resource
+   * @param on_table True if this is a request on table, False if on row
+   * @param mode the lock mode requesting
+   * @param table_id the table id
+   * @param rid the row id, default value of RID if it's a table request
+   * @precondition holding mutex for the corresponding resource's request queue
+   * @return True if this is a valid request, False otherwise with abort reason populated to be thrown
+   */
+  auto IsLockRequestValid(Transaction *transaction, AbortReason &reason, bool &is_upgrade, LockMode &prev_mode,
+                          std::shared_ptr<LockRequestQueue> &queue, bool on_table, LockMode mode, table_oid_t table_id,
+                          RID rid) -> bool;
+
+  /**
+   * Check if a unlocking request is valid based on the isolation level and phase of the transaction
+   * @param transaction the transaction making request
+   * @param reason[out] if this request is to be aborted, populated with abort reason
+   * @param mode[out] the locked mode held by the transaction
+   * @param queue the request queue for this specific resource
+   * @param on_table True if this is a request on table, False if on row
+   * @param table_id the table id
+   * @param rid the row id, default value of RID if it's a table request
+   * @precondition holding mutex for the corresponding resource's request queue
+   * @return True if this is a valid request, False otherwise with abort reason populated to be thrown
+   */
+  auto IsUnlockRequestValid(Transaction *transaction, AbortReason &reason, LockMode &mode,
+                            std::shared_ptr<LockRequestQueue> &queue, bool on_table, table_oid_t table_id, RID rid)
+      -> bool;
+
+  /**
+   * Potentially change the transaction state to Shrinking
+   * @param transaction the transaction unlocking a resource
+   * @param unlock_mode the previous mode locked
+   */
+  void UpdateTransactionStateOnUnlock(Transaction *transaction, LockMode unlock_mode);
+
+  /**
+   * Check if a pending locking request could proceed
+   * this func assumes that request has already been placed into request_queue at proper index
+   * (unlocking request won't block and always proceed as long as valid)
+   * This request must already have been verified as a valid request
+   * To be used in a condition variable wait repeatedly
+   * @param request pending requesting (already placed into queue)
+   * @param txn the transaction requesting
+   * @param queue the LockRequestQueue for the specific resource
+   * @param is_upgrade True if this request is an upgrading request
+   * @param already_abort[out] if this transaction has been aborted meantime
+   * @precondition holding mutex for the corresponding resource's request queue
+   * @return True if could exit the condition variable waiting (should check if should_abort variable)
+   */
+  auto CouldLockRequestProceed(const std::shared_ptr<LockManager::LockRequest> &request, Transaction *txn,
+                               const std::shared_ptr<LockRequestQueue> &queue, bool is_upgrade, bool &already_abort)
+      -> bool;
 
   /**
    * [LOCK_NOTE]
@@ -149,7 +308,7 @@ class LockManager {
    *    A lock request being upgraded should be prioritised over other waiting lock requests on the same resource.
    *
    *    While upgrading, only the following transitions should be allowed:
-   *        IS -> [S, X, SIX]
+   *        IS -> [S, X, IX, SIX]
    *        S -> [X, SIX]
    *        IX -> [X, SIX]
    *        SIX -> [X]
@@ -217,7 +376,7 @@ class LockManager {
    * @param oid the table_oid_t of the table to be locked in lock_mode
    * @return true if the upgrade is successful, false otherwise
    */
-  auto LockTable(Transaction *txn, LockMode lock_mode, const table_oid_t &oid) noexcept(false) -> bool;
+  auto LockTable(Transaction *txn, LockMode lock_mode, const table_oid_t &oid) -> bool;
 
   /**
    * Release the lock held on a table by the transaction.
@@ -231,6 +390,9 @@ class LockManager {
    * @return true if the unlock is successful, false otherwise
    */
   auto UnlockTable(Transaction *txn, const table_oid_t &oid) -> bool;
+
+  /** Wrapper for UnlockTable, some special case for if this unlock is from upgrade locking request */
+  auto UnlockTableHelper(Transaction *txn, const table_oid_t &oid, bool from_upgrade = false) -> bool;
 
   /**
    * Acquire a lock on rid in the given lock_mode.
@@ -263,6 +425,9 @@ class LockManager {
    * @return true if the unlock is successful, false otherwise
    */
   auto UnlockRow(Transaction *txn, const table_oid_t &oid, const RID &rid) -> bool;
+
+  /** Wrapper for UnlockTable, some special case for if this unlock is from upgrade locking request */
+  auto UnlockRowHelper(Transaction *txn, const table_oid_t &oid, const RID &rid, bool from_upgrade = false) -> bool;
 
   /*** Graph API ***/
 
@@ -299,20 +464,116 @@ class LockManager {
 
  private:
   /** Fall 2022 */
+
+  /**
+   * Refresh and Rebuild the whole wait for graph
+   * everytime the back running thread wakes up
+   */
+  void RebuildWaitForGraph() {
+    waits_for_.clear();
+    for (const auto &[table_id, request_queue] : table_lock_map_) {
+      std::set<txn_id_t> granted;
+      for (const auto &request : request_queue->request_queue_) {
+        if (request->granted_) {
+          granted.insert(request->txn_id_);
+        } else {
+          // waits for a resource, build an edge
+          for (const auto &holder : granted) {
+            AddEdge(request->txn_id_, holder);
+          }
+        }
+      }
+    }
+    for (const auto &[row_id, request_queue] : row_lock_map_) {
+      std::set<txn_id_t> granted;
+      for (const auto &request : request_queue->request_queue_) {
+        if (request->granted_) {
+          granted.insert(request->txn_id_);
+        } else {
+          // waits for a resource, build an edge
+          for (const auto &holder : granted) {
+            AddEdge(request->txn_id_, holder);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Trim the already built waitfor graph when we decide to abort a transaction
+   */
+  void TrimGraph(txn_id_t aborted_txn) {
+    waits_for_.erase(aborted_txn);
+    for (auto &[start_node, end_node_set] : waits_for_) {
+      end_node_set.erase(aborted_txn);
+    }
+  }
+
+  /**
+   * Helper function to run DFS search on the wait_for graph
+   * the path is the current walking path and once cycle detected, it should main
+   * t0 -> t1 -> ... -> t0 such a cycle path
+   * @return the first txn_id of the cycle
+   */
+  auto DepthFirstSearch(txn_id_t curr, std::set<txn_id_t> &visited, std::deque<txn_id_t> &path) -> txn_id_t {
+    // mark curr node as visited and append to current path
+    visited.insert(curr);
+    path.push_back(curr);
+
+    if (waits_for_.find(curr) != waits_for_.end()) {
+      for (const auto &neighbor : waits_for_[curr]) {
+        if (visited.find(neighbor) == visited.end()) {
+          // this neighbor not visited yet
+          auto cycle_id = DepthFirstSearch(neighbor, visited, path);
+          if (cycle_id != NO_CYCLE) {
+            // a cycle is detected ahead
+            return cycle_id;
+          }
+        } else if (std::find(path.begin(), path.end(), neighbor) != path.end()) {
+          // back edge detected
+          return neighbor;
+        }
+      }
+    }
+    // remove from curr path
+    path.pop_back();
+    return NO_CYCLE;
+  }
+
+  /**
+   * When we abort a transaction due to deadlock detection
+   * notify every waiting thread about this change
+   */
+  void NotifyAllTransaction() {
+    for (const auto &[table_id, request_queue] : table_lock_map_) {
+      request_queue->cv_.notify_all();
+    }
+    for (const auto &[row_id, request_queue] : row_lock_map_) {
+      request_queue->cv_.notify_all();
+    }
+  }
+
+  /** compatible matrix to test if a new request could proceed given previous granted requests */
+  std::unordered_map<LockMode, std::unordered_set<LockMode>> compatible_matrix_;
+  /** upgrade matrix to test if a new upgrade request could proceed given previous granted requests */
+  std::unordered_map<LockMode, std::unordered_set<LockMode>> upgrade_matrix_;
+
   /** Structure that holds lock requests for a given table oid */
-  std::unordered_map<table_oid_t, LockRequestQueue> table_lock_map_;
+  std::unordered_map<table_oid_t, std::shared_ptr<LockRequestQueue>> table_lock_map_;
   /** Coordination */
   std::mutex table_lock_map_latch_;
 
   /** Structure that holds lock requests for a given RID */
-  std::unordered_map<RID, LockRequestQueue> row_lock_map_;
+  std::unordered_map<RID, std::shared_ptr<LockRequestQueue>> row_lock_map_;
+
   /** Coordination */
   std::mutex row_lock_map_latch_;
 
   std::atomic<bool> enable_cycle_detection_;
   std::thread *cycle_detection_thread_;
+
   /** Waits-for graph representation. */
-  std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
+  std::map<txn_id_t, std::set<txn_id_t>> waits_for_;
   std::mutex waits_for_latch_;
 };
 

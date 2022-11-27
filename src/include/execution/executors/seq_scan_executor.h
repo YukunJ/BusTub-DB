@@ -56,5 +56,8 @@ class SeqScanExecutor : public AbstractExecutor {
 
   /** The current cursor scanning the table */
   TableIterator cursor_;
+
+  /** If this exectuor acquired a lock */
+  bool obtain_lock_{false};
 };
 }  // namespace bustub
