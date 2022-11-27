@@ -29,6 +29,16 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   if (insert_finished_) {
     return false;
   }
+  /* begin insertion, IX lock on table if not locked yet */
+  auto txn = exec_ctx_->GetTransaction();
+  if (!txn->IsTableIntentionExclusiveLocked(plan_->TableOid())) {
+    auto table_lock_success =
+        exec_ctx_->GetLockManager()->LockTable(txn, LockManager::LockMode::INTENTION_EXCLUSIVE, plan_->TableOid());
+    if (!table_lock_success) {
+      txn->SetState(TransactionState::ABORTED);
+      throw bustub::Exception(ExceptionType::EXECUTION, "InsertExecutor cannot get IX lock on table");
+    }
+  }
   Tuple child_tuple{};
   RID rid_holder{};
   int64_t count = 0;
@@ -39,11 +49,13 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   auto table_ptr = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid())->table_.get();
   // tuple's schema
   auto tuple_schema = child_executor_->GetOutputSchema();
-
+  auto oid = plan_->TableOid();
   auto status = child_executor_->Next(&child_tuple, rid);
   while (status) {
-    // actual insert
+    // actual insert, WAL also added in the InsertTuple func
     count += static_cast<int64_t>(table_ptr->InsertTuple(child_tuple, &rid_holder, exec_ctx_->GetTransaction()));
+    // don't want other transactions to see this record yet until commit
+    exec_ctx_->GetLockManager()->LockRow(txn, LockManager::LockMode::EXCLUSIVE, oid, rid_holder);
     // update any indexes available
     if (!table_indexes.empty()) {
       std::for_each(table_indexes.begin(), table_indexes.end(), [&](auto lt) {

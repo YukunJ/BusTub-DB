@@ -63,6 +63,7 @@ class InsertExecutor : public AbstractExecutor {
 
   /** If the insertion has finished */
   bool insert_finished_{false};
+  /** If this executor acquire locks */
 };
 
 }  // namespace bustub

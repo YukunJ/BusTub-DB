@@ -265,14 +265,14 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
   auto is_valid_request = IsLockRequestValid(txn, reason, is_upgrade, prev_mode, queue, true, lock_mode, oid, RID());
   if (!is_valid_request) {
     /* not valid, unlock + abort + throw exception */
-    LOG_INFO("txn %d made an invalid LockTable Request on table %d of mode %d with reason %d\n",
-             txn->GetTransactionId(), oid, static_cast<int>(lock_mode), reason);
+    //    LOG_INFO("txn %d made an invalid LockTable Request on table %d of mode %d with reason %d\n",
+    //             txn->GetTransactionId(), oid, static_cast<int>(lock_mode), reason);
     txn->SetState(TransactionState::ABORTED);
     txn->UnlockTxn();
     throw TransactionAbortException(txn->GetTransactionId(), reason);
   }
-  LOG_INFO("txn %d made a valid LockTable Request on table %d of mode %d\n", txn->GetTransactionId(), oid,
-           static_cast<int>(lock_mode));
+  //  LOG_INFO("txn %d made a valid LockTable Request on table %d of mode %d\n", txn->GetTransactionId(), oid,
+  //           static_cast<int>(lock_mode));
   /* if it's upgrade request, special treatment */
   if (is_upgrade) {                // NOLINT
     if (prev_mode == lock_mode) {  // NOLINT
@@ -301,8 +301,9 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
       // no more waiting upgrading request now
       queue->upgrading_ = INVALID_TXN_ID;
     }
-    LOG_INFO("txn %d 's LockTable Request on table %d of mode %d is aborted half-way\n", txn->GetTransactionId(), oid,
-             static_cast<int>(lock_mode));
+    //    LOG_INFO("txn %d 's LockTable Request on table %d of mode %d is aborted half-way\n", txn->GetTransactionId(),
+    //    oid,
+    //             static_cast<int>(lock_mode));
     auto it = std::find_if(queue->request_queue_.begin(), queue->request_queue_.end(),
                            [&](const std::shared_ptr<LockRequest> &request) -> bool {
                              return request->txn_id_ == txn->GetTransactionId() && request->oid_ == oid;
@@ -313,8 +314,8 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
     return false;
   }
   // notify other waiting threads
-  LOG_INFO("txn %d 's LockTable Request on table %d of mode %d succeed\n", txn->GetTransactionId(), oid,
-           static_cast<int>(lock_mode));
+  //  LOG_INFO("txn %d 's LockTable Request on table %d of mode %d succeed\n", txn->GetTransactionId(), oid,
+  //           static_cast<int>(lock_mode));
   lock.unlock();
   queue->cv_.notify_all();
   return true;
@@ -338,8 +339,9 @@ auto LockManager::UnlockTableHelper(Transaction *txn, const table_oid_t &oid, bo
   auto is_valid_request = IsUnlockRequestValid(txn, reason, locked_mode, queue, true, oid, RID());
   if (!is_valid_request) {  // NOLINT
     /* not valid, unlock + abort + throw exception */
-    LOG_INFO("txn %d made an invalid UnlockTable Request on table %d with reason %d\n", txn->GetTransactionId(), oid,
-             static_cast<int>(reason));  // NOLINT
+    //    LOG_INFO("txn %d made an invalid UnlockTable Request on table %d with reason %d\n", txn->GetTransactionId(),
+    //    oid,
+    //             static_cast<int>(reason));  // NOLINT
     txn->SetState(TransactionState::ABORTED);
     if (!from_upgrade) {
       txn->UnlockTxn();
@@ -347,7 +349,7 @@ auto LockManager::UnlockTableHelper(Transaction *txn, const table_oid_t &oid, bo
     throw TransactionAbortException(txn->GetTransactionId(), reason);
   }
 
-  LOG_INFO("txn %d made a valid UnlockTable Request on table %d\n", txn->GetTransactionId(), oid);
+  //  LOG_INFO("txn %d made a valid UnlockTable Request on table %d\n", txn->GetTransactionId(), oid);
   /* potentially update the transaction state */
   if (!from_upgrade && txn->GetState() != TransactionState::COMMITTED && txn->GetState() != TransactionState::ABORTED) {
     UpdateTransactionStateOnUnlock(txn, locked_mode);
@@ -370,7 +372,7 @@ auto LockManager::UnlockTableHelper(Transaction *txn, const table_oid_t &oid, bo
   } else if (locked_mode == LockMode::SHARED_INTENTION_EXCLUSIVE) {
     txn->GetSharedIntentionExclusiveTableLockSet()->erase(oid);
   }
-  LOG_INFO("txn %d 's UnlockTable Request on table %d succeed\n", txn->GetTransactionId(), oid);
+  //  LOG_INFO("txn %d 's UnlockTable Request on table %d succeed\n", txn->GetTransactionId(), oid);
   /* unlock transaction */
   if (!from_upgrade) {
     txn->UnlockTxn();
@@ -393,14 +395,14 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
   auto is_valid_request = IsLockRequestValid(txn, reason, is_upgrade, prev_mode, queue, false, lock_mode, oid, rid);
   if (!is_valid_request) {  // NOLINT
     /* not valid, unlock + abort + throw exception */
-    LOG_INFO("txn %d made an invalid LockRow Request on table %d row %s of mode %d with reason %d\n",
-             txn->GetTransactionId(), oid, rid.ToString().c_str(), static_cast<int>(lock_mode), reason);
+    //    LOG_INFO("txn %d made an invalid LockRow Request on table %d row %s of mode %d with reason %d\n",
+    //             txn->GetTransactionId(), oid, rid.ToString().c_str(), static_cast<int>(lock_mode), reason);
     txn->SetState(TransactionState::ABORTED);
     txn->UnlockTxn();
     throw TransactionAbortException(txn->GetTransactionId(), reason);
   }
-  LOG_INFO("txn %d made a valid LockRow Request on table %d row %s of mode %d\n", txn->GetTransactionId(), oid,
-           rid.ToString().c_str(), static_cast<int>(lock_mode));
+  //  LOG_INFO("txn %d made a valid LockRow Request on table %d row %s of mode %d\n", txn->GetTransactionId(), oid,
+  //           rid.ToString().c_str(), static_cast<int>(lock_mode));
   /* if it's upgrade request, special treatment */
   if (is_upgrade) {                // NOLINT
     if (prev_mode == lock_mode) {  // NOLINT
@@ -430,8 +432,9 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
       // no more waiting upgrading request now
       queue->upgrading_ = INVALID_TXN_ID;
     }
-    LOG_INFO("txn %d 's LockRow Request on table %d row %s of mode %d is aborted half-way\n", txn->GetTransactionId(),
-             oid, rid.ToString().c_str(), static_cast<int>(lock_mode));
+    //    LOG_INFO("txn %d 's LockRow Request on table %d row %s of mode %d is aborted half-way\n",
+    //    txn->GetTransactionId(),
+    //             oid, rid.ToString().c_str(), static_cast<int>(lock_mode));
     auto it = std::find_if(queue->request_queue_.begin(), queue->request_queue_.end(),
                            [&](const std::shared_ptr<LockRequest> &request) -> bool {
                              return request->txn_id_ == txn->GetTransactionId() && request->oid_ == oid &&
@@ -442,8 +445,8 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
     queue->cv_.notify_all();
     return false;
   }
-  LOG_INFO("txn %d 's LockRow Request on table %d row %s of mode %d succeed\n", txn->GetTransactionId(), oid,
-           rid.ToString().c_str(), static_cast<int>(lock_mode));
+  //  LOG_INFO("txn %d 's LockRow Request on table %d row %s of mode %d succeed\n", txn->GetTransactionId(), oid,
+  //           rid.ToString().c_str(), static_cast<int>(lock_mode));
   // notify other waiting threads
   lock.unlock();
   queue->cv_.notify_all();
@@ -468,9 +471,9 @@ auto LockManager::UnlockRowHelper(Transaction *txn, const table_oid_t &oid, cons
   auto is_valid_request = IsUnlockRequestValid(txn, reason, locked_mode, queue, false, oid, rid);
   if (!is_valid_request) {  // NOLINT
     /* not valid, unlock + abort + throw exception */
-    LOG_INFO("txn %d made an invalid UnlockRow Request on table %d row %s of mode %d with reason %d\n",  // NOLINT
-             txn->GetTransactionId(), oid, rid.ToString().c_str(), static_cast<int>(locked_mode),
-             static_cast<int>(reason));
+    //    LOG_INFO("txn %d made an invalid UnlockRow Request on table %d row %s of mode %d with reason %d\n",  // NOLINT
+    //             txn->GetTransactionId(), oid, rid.ToString().c_str(), static_cast<int>(locked_mode),
+    //             static_cast<int>(reason));
     txn->SetState(TransactionState::ABORTED);
     if (!from_upgrade) {
       txn->UnlockTxn();
@@ -495,8 +498,8 @@ auto LockManager::UnlockRowHelper(Transaction *txn, const table_oid_t &oid, cons
   } else if (locked_mode == LockMode::EXCLUSIVE) {
     txn->GetExclusiveRowLockSet()->at(oid).erase(rid);
   }
-  LOG_INFO("txn %d 's UnlockRow Request on table %d row %s of mode %d succeed\n", txn->GetTransactionId(), oid,
-           rid.ToString().c_str(), static_cast<int>(locked_mode));
+  //  LOG_INFO("txn %d 's UnlockRow Request on table %d row %s of mode %d succeed\n", txn->GetTransactionId(), oid,
+  //           rid.ToString().c_str(), static_cast<int>(locked_mode));
   /* unlock transaction */
   if (!from_upgrade) {
     txn->UnlockTxn();
@@ -513,14 +516,12 @@ void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) { waits_for_[t1].erase(t2
 
 auto LockManager::HasCycle(txn_id_t *txn_id) -> bool {
   // assume the graph is already fully built
-  const auto &list = LockManager::GetEdgeList();
   std::deque<txn_id_t> path;
   std::set<txn_id_t> visited;
   for (const auto &[start_node, end_node_set] : waits_for_) {
     if (visited.find(start_node) == visited.end()) {
       auto cycle_id = DepthFirstSearch(start_node, visited, path);
       if (cycle_id != NO_CYCLE) {
-        std::for_each(path.begin(), path.end(), [](const auto &it) { std::cout << it << " "; });
         // trim the path and retain only those involved in cycle
         auto it = std::find(path.begin(), path.end(), cycle_id);
         path.erase(path.begin(), it);

@@ -68,7 +68,7 @@ void CheckTxnRowLockSize(Transaction *txn, size_t shared_size, size_t exclusive_
 }
 
 // NOLINTNEXTLINE
-TEST_F(TransactionTest, DISABLED_SimpleInsertRollbackTest) {
+TEST_F(TransactionTest, SimpleInsertRollbackTest) {
   // txn1: INSERT INTO empty_table2 VALUES (200, 20), (201, 21), (202, 22)
   // txn1: abort
   // txn2: SELECT * FROM empty_table2;
@@ -91,7 +91,7 @@ TEST_F(TransactionTest, DISABLED_SimpleInsertRollbackTest) {
 }
 
 // NOLINTNEXTLINE
-TEST_F(TransactionTest, DISABLED_DirtyReadsTest) {
+TEST_F(TransactionTest, DirtyReadsTest) {
   bustub_->GenerateTestTable();
 
   // txn1: INSERT INTO empty_table2 VALUES (200, 20), (201, 21), (202, 22)
@@ -119,4 +119,41 @@ TEST_F(TransactionTest, DISABLED_DirtyReadsTest) {
   delete txn1;
 }
 
+// NOLINTNEXTLINE
+TEST_F(TransactionTest, RepeatableReadsTest) {
+  bustub_->GenerateTestTable();
+
+  // txn1: INSERT INTO empty_table2 VALUES (200, 20), (201, 21), (202, 22)
+  // txn2: SELECT * FROM empty_table2;
+  // txn1: abort
+
+  auto noop_writer = NoopWriter();
+
+  bustub_->ExecuteSql("CREATE TABLE empty_table1 (colA int, colB int)", noop_writer);
+
+  // txn1 first write something into the table
+  auto *txn1 = bustub_->txn_manager_->Begin(nullptr, IsolationLevel::READ_UNCOMMITTED);
+  bustub_->ExecuteSqlTxn("INSERT INTO empty_table1 VALUES (200, 20), (201, 21), (202, 22)", noop_writer, txn1);
+  bustub_->txn_manager_->Commit(txn1);
+  delete txn1;
+
+  // since txn1 already commit txn2 should be able to read it out
+  auto *txn2 = bustub_->txn_manager_->Begin(nullptr, IsolationLevel::REPEATABLE_READ);
+  std::stringstream ss;
+  auto writer2 = SimpleStreamWriter(ss, true);
+  bustub_->ExecuteSqlTxn("SELECT * FROM empty_table1", writer2, txn2);
+  EXPECT_EQ(ss.str(), "200\t20\t\n201\t21\t\n202\t22\t\n");
+  ss.clear();
+
+  // txn2 should be able to read out its own changes
+  std::stringstream ss2;
+  bustub_->ExecuteSqlTxn("INSERT INTO empty_table1 VALUES (203, 23)", noop_writer, txn2);
+  auto writer3 = SimpleStreamWriter(ss2, true);
+  bustub_->ExecuteSqlTxn("SELECT * FROM empty_table1", writer3, txn2);
+  EXPECT_EQ(ss2.str(), "200\t20\t\n201\t21\t\n202\t22\t\n203\t23\t\n");
+  ss2.clear();
+
+  bustub_->txn_manager_->Commit(txn2);
+  delete txn2;
+}
 }  // namespace bustub
