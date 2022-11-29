@@ -613,6 +613,7 @@ auto Optimizer::OptimizeCustom(const AbstractPlanNodeRef &plan) -> AbstractPlanN
   p = OptimizeBreakColumnEqualFilter(p);  // enable pred -> into NLJ -> into hash join
   p = OptimizeMergeTrueFilter(p);         // merge true and true and ... true into only one true filter
   p = OptimizeEliminateTrueFilter(p);     // remove only one true filter
+  p = OptimizeMergeFilterScan(p);
   p = OptimizeMergeFilterNLJ(p);
   p = OptimizeReorderJoinOnCardinality(p);
   p = OptimizeNLJAsIndexJoin(p);

@@ -30,8 +30,10 @@ class IndexScanPlanNode : public AbstractPlanNode {
    * @param output the output format of this scan plan node
    * @param table_oid the identifier of table to be scanned
    */
-  IndexScanPlanNode(SchemaRef output, index_oid_t index_oid)
-      : AbstractPlanNode(std::move(output), {}), index_oid_(index_oid) {}
+  IndexScanPlanNode(SchemaRef output, index_oid_t index_oid, AbstractExpressionRef filter_predicate = nullptr)
+      : AbstractPlanNode(std::move(output), {}),
+        index_oid_(index_oid),
+        filter_predicate_(std::move(filter_predicate)) {}
 
   auto GetType() const -> PlanType override { return PlanType::IndexScan; }
 
@@ -43,11 +45,13 @@ class IndexScanPlanNode : public AbstractPlanNode {
   /** The table whose tuples should be scanned. */
   index_oid_t index_oid_;
 
+  /** The predicate to filter in indexscan. nullptr by default */
+  AbstractExpressionRef filter_predicate_;
   // Add anything you want here for index lookup
 
  protected:
   auto PlanNodeToString() const -> std::string override {
-    return fmt::format("IndexScan {{ index_oid={} }}", index_oid_);
+    return fmt::format("IndexScan {{ index_oid={}, filter={} }} ", index_oid_, filter_predicate_);
   }
 };
 
