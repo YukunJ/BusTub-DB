@@ -1,0 +1,13 @@
+# create Terrier Benchmark table
+statement ok
+create table nft(id int, terrier int);
+
+statement ok
+create index nftid on nft(id);
+
+statement ok
+explain update nft set terrier = 1 WHERE id = 1;
+
+statement ok
+explain select * from nft where id = 1;
+

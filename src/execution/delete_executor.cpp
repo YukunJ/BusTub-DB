@@ -50,7 +50,6 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   // tuple's schema
   auto tuple_schema = child_executor_->GetOutputSchema();
   auto oid = plan_->TableOid();
-
   auto status = child_executor_->Next(&child_tuple, rid);
   while (status) {
     // actual delete
