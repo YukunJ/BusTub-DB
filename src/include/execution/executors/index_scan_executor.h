@@ -51,9 +51,13 @@ class IndexScanExecutor : public AbstractExecutor {
   BPlusTreeIndexForOneIntegerColumn *tree_{nullptr};
 
   /** Index current cursor */
-  decltype(tree_->GetBeginIterator()) cursor_{};
+  decltype(tree_->GetBeginIterator()) cursor_;
 
   /** Index end cursor */
-  decltype(tree_->GetEndIterator()) end_{};
+  decltype(tree_->GetEndIterator()) end_;
+
+  /** For index scan with filter predicate optimization */
+  std::vector<RID> filtered_result_;
+  //  bool obtain_lock_{false};
 };
 }  // namespace bustub

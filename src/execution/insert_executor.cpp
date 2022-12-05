@@ -12,6 +12,8 @@
 
 #include <memory>
 
+#include "binder/binder.h"
+#include "binder/statement/index_statement.h"
 #include "execution/executors/insert_executor.h"
 
 namespace bustub {

@@ -13,41 +13,48 @@
  * For range scan of b+ tree
  */
 #pragma once
+
+#include <map>
+#include <utility>
+
+#include "storage/index/stl_comparator_wrapper.h"
 #include "storage/page/b_plus_tree_leaf_page.h"
 
 namespace bustub {
 
 #define INDEXITERATOR_TYPE IndexIterator<KeyType, ValueType, KeyComparator>
-#define LEAF_TYPE BPlusTreeLeafPage<KeyType, ValueType, KeyComparator> *
+
 INDEX_TEMPLATE_ARGUMENTS
 class IndexIterator {
  public:
-  // you may define your own constructor based on your member variables
-  IndexIterator();
+  IndexIterator() = default;
+  IndexIterator(
+      const std::map<KeyType, ValueType, StlComparatorWrapper<KeyType, KeyComparator>> *map,
+      typename std::map<KeyType, ValueType, StlComparatorWrapper<KeyType, KeyComparator>>::const_iterator iter)
+      : map_(map), iter_(std::move(iter)) {}
 
-  IndexIterator(page_id_t page_id, int index, LEAF_TYPE leaf_page, BufferPoolManager *buffer_pool_manager);
+  ~IndexIterator() = default;
 
-  ~IndexIterator();  // NOLINT
+  auto IsEnd() -> bool { return iter_ != map_->cend(); }
 
-  auto IsEnd() -> bool;
+  auto operator*() -> const MappingType & {
+    ret_val_ = *iter_;
+    return ret_val_;
+  }
 
-  auto operator*() -> const MappingType &;
+  auto operator++() -> IndexIterator & {
+    iter_++;
+    return *this;
+  }
 
-  auto operator++() -> IndexIterator &;
+  inline auto operator==(const IndexIterator &itr) const -> bool { return itr.iter_ == iter_; }
 
-  auto operator==(const IndexIterator &itr) const -> bool;
-
-  auto operator!=(const IndexIterator &itr) const -> bool;
+  inline auto operator!=(const IndexIterator &itr) const -> bool { return !(*this == itr); }
 
  private:
-  // add your own private member variables here
-
-  auto FetchLeafPage(page_id_t page_id) -> LEAF_TYPE;
-
-  page_id_t page_id_{INVALID_PAGE_ID};
-  int idx_{-1};
-  LEAF_TYPE leaf_page_{nullptr};
-  BufferPoolManager *buffer_pool_manager_{nullptr};
+  const std::map<KeyType, ValueType, StlComparatorWrapper<KeyType, KeyComparator>> *map_;
+  typename std::map<KeyType, ValueType, StlComparatorWrapper<KeyType, KeyComparator>>::const_iterator iter_;
+  std::pair<KeyType, ValueType> ret_val_;
 };
 
 }  // namespace bustub

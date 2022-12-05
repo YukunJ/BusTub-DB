@@ -32,28 +32,28 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   }
   /* Begin Update, grab IX lock on the table first */
   auto txn = exec_ctx_->GetTransaction();
-  if (!txn->IsTableIntentionExclusiveLocked(plan_->TableOid())) {
-    // grab IX lock on table if not locked yet
-    auto table_lock_success =
-        exec_ctx_->GetLockManager()->LockTable(txn, LockManager::LockMode::INTENTION_EXCLUSIVE, plan_->TableOid());
-    if (!table_lock_success) {
-      txn->SetState(TransactionState::ABORTED);
-      throw bustub::Exception(ExceptionType::EXECUTION, "Update cannot get IX lock on table");
-    }
-  }
+  //  if (!txn->IsTableIntentionExclusiveLocked(plan_->TableOid())) {
+  //    // grab IX lock on table if not locked yet
+  //    auto table_lock_success =
+  //        exec_ctx_->GetLockManager()->LockTable(txn, LockManager::LockMode::INTENTION_EXCLUSIVE, plan_->TableOid());
+  //    if (!table_lock_success) {
+  //      txn->SetState(TransactionState::ABORTED);
+  //      throw bustub::Exception(ExceptionType::EXECUTION, "Update cannot get IX lock on table");
+  //    }
+  //  }
   auto table_ptr = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid())->table_.get();
-  auto oid = plan_->TableOid();
+  //  auto oid = plan_->TableOid();
   Tuple child_tuple{};
   RID rid_holder{};
   int64_t count = 0;
   auto status = child_executor_->Next(&child_tuple, &rid_holder);
   while (status) {
     /* Grab X lock on row first */
-    auto update_rid = child_tuple.GetRid();
-    if (!txn->IsRowExclusiveLocked(oid, update_rid)) {
-      // no other transaction should see such update until we commit
-      exec_ctx_->GetLockManager()->LockRow(txn, LockManager::LockMode::EXCLUSIVE, oid, update_rid);
-    }
+    //    auto update_rid = child_tuple.GetRid();
+    //    if (!txn->IsRowExclusiveLocked(oid, update_rid)) {
+    //      // no other transaction should see such update until we commit
+    //      exec_ctx_->GetLockManager()->LockRow(txn, LockManager::LockMode::EXCLUSIVE, oid, update_rid);
+    //    }
     count += static_cast<int64_t>(table_ptr->UpdateTuple(child_tuple, rid_holder, txn));
     // increment cursor
     status = child_executor_->Next(&child_tuple, &rid_holder);

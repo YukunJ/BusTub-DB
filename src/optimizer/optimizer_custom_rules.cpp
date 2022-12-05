@@ -7,6 +7,7 @@
 #include "execution/plans/aggregation_plan.h"
 #include "execution/plans/filter_plan.h"
 #include "execution/plans/hash_join_plan.h"
+#include "execution/plans/index_scan_plan.h"
 #include "execution/plans/mock_scan_plan.h"
 #include "execution/plans/nested_loop_join_plan.h"
 #include "execution/plans/projection_plan.h"
@@ -611,8 +612,9 @@ auto Optimizer::OptimizeCustom(const AbstractPlanNodeRef &plan) -> AbstractPlanN
   p = OptimizeAggregateColumnPrune(
       p);  // prune aggregate column if an projection is present above it and only takes a subset
   p = OptimizeBreakColumnEqualFilter(p);  // enable pred -> into NLJ -> into hash join
-  p = OptimizeMergeTrueFilter(p);         // merge true and true and ... true into only one true filter
-  p = OptimizeEliminateTrueFilter(p);     // remove only one true filter
+  p = OptimizeSortLimitAsTopN(p);
+  p = OptimizeMergeTrueFilter(p);      // merge true and true and ... true into only one true filter
+  p = OptimizeEliminateTrueFilter(p);  // remove only one true filter
   p = OptimizeMergeFilterScan(p);
   p = OptimizeMergeFilterNLJ(p);
   p = OptimizeReorderJoinOnCardinality(p);

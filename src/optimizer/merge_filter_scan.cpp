@@ -31,26 +31,6 @@ auto Optimizer::OptimizeMergeFilterScan(const AbstractPlanNodeRef &plan) -> Abst
     if (child_plan.GetType() == PlanType::SeqScan) {
       const auto &seq_scan_plan = dynamic_cast<const SeqScanPlanNode &>(child_plan);
       if (seq_scan_plan.filter_predicate_ == nullptr) {
-        // if a single filter is on an existing index, convert to indexScan with predicate
-        //        if (const auto *expr = dynamic_cast<const ComparisonExpression *>(&*filter_plan.GetPredicate());
-        //            expr != nullptr) {
-        //          // left a Column expression & right is a Constant expression & is Equal Comparison
-        //          if (expr->comp_type_ == ComparisonType::Equal) {
-        //            if (const auto *left_expr = dynamic_cast<const ColumnValueExpression *>(expr->children_[0].get());
-        //                left_expr != nullptr && left_expr->GetTupleIdx() == 0) {
-        //              if (const auto *right_expr = dynamic_cast<const ConstantValueExpression
-        //              *>(expr->children_[1].get());
-        //                  right_expr != nullptr) {
-        //                if (auto index = MatchIndex(seq_scan_plan.table_name_, left_expr->GetColIdx()); index !=
-        //                std::nullopt) {
-        //                  auto [index_oid, index_name] = *index;
-        //                  return std::make_shared<IndexScanPlanNode>(seq_scan_plan.output_schema_, index_oid,
-        //                                                             filter_plan.GetPredicate());
-        //                }
-        //              }
-        //            }
-        //          }
-        //        }
         // default to seqScan with predicate
         return std::make_shared<SeqScanPlanNode>(filter_plan.output_schema_, seq_scan_plan.table_oid_,
                                                  seq_scan_plan.table_name_, filter_plan.GetPredicate());
